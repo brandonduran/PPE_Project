@@ -118,6 +118,14 @@
 !     histograms.
       REAL(wp), PARAMETER :: modis_phase_threshold = 0.7_wp
 
+!     How deep into the cloud (in optical depth, from cloud top) the phase
+!     determination looks: matches real COSP's phase_TauLimit
+!     (cosp_modis_interface.F90's COSP_MODIS_INIT in ~/COSPv2.0). Passive
+!     VIS/NIR retrievals only "see" the topmost cloud optical depth, so
+!     liquid_fraction below is deliberately NOT a whole-subcolumn average --
+!     see the tau_phase_cum/tauf_phase_cum accumulation.
+      REAL(wp), PARAMETER :: modis_phase_taulimit = 1._wp
+
 !     Minimum detectable optical thickness for the whole MODIS block below
 !     (cloud-fraction outputs AND the LWP/IWP-vs-Reff histograms): matches
 !     real COSP's min_OpticalThickness (cosp_modis_interface.F90's
@@ -357,12 +365,36 @@
       REAL(wp) :: box_reffl(npoints), box_reffi(npoints)
       REAL(wp) :: box_lwp(npoints), box_iwp(npoints)
       REAL(wp) :: liquid_fraction(npoints)
-                  !  tau_liq/(tau_liq+tau_ice) for the current subcolumn --
+                  !  tauf_phase_cum/tau_phase_cum for the current subcolumn --
                   !  the single per-subcolumn phase-dominance fraction used
                   !  to decide liquid- vs. ice-dominated (see
-                  !  modis_phase_threshold above)
+                  !  modis_phase_threshold above). NOTE: intentionally NOT
+                  !  tau_liq/(tau_liq+tau_ice) -- see tau_phase_cum below.
       INTEGER  :: imodis_lwp(npoints), imodis_reffl(npoints)
       INTEGER  :: imodis_iwp(npoints), imodis_reffi(npoints)
+
+      REAL(wp) :: tau_phase_cum(npoints,ncol), tauf_phase_cum(npoints,ncol)
+                  !  running (cloud-top-down) cumulative total optical depth
+                  !  and optical-depth-weighted liquid-fraction product used
+                  !  to build liquid_fraction above, ports COSPv2's
+                  !  weight_by_extinction (modis_simulator.F90) restricted to
+                  !  the top modis_phase_taulimit of cloud optical depth --
+                  !  deliberately NOT the same whole-subcolumn tau_liq/tau_ice
+                  !  sums used for the Reff weighting (box_reffl/box_reffi),
+                  !  since a passive VIS/NIR sensor only sees the cloud-top
+                  !  phase, not a full-column average
+      LOGICAL  :: phase_active(npoints,ncol)
+                  !  .true. until a subcolumn's cumulative tau reaches
+                  !  modis_phase_taulimit; freezes tau_phase_cum/
+                  !  tauf_phase_cum thereafter (the vectorized-over-npoints
+                  !  equivalent of weight_by_extinction's scalar "exit")
+      REAL(wp) :: phase_tau_incr, phase_f_liq, phase_deltatau
+                  !  per-(j,ibox,ilev) scratch scalars for the
+                  !  tau_phase_cum/tauf_phase_cum accumulation: this level's
+                  !  total (liquid+ice) tau increment, this level's liquid
+                  !  fraction, and (on the level where the cumulative tau
+                  !  crosses modis_phase_taulimit) the partial increment
+                  !  actually used, mirroring weight_by_extinction's deltaX
 ! BMD 07/26 - end
 
       INTEGER :: debug       ! set to non-zero value to print out inputs
@@ -550,6 +582,9 @@
           tau_ice(j,ibox)=0._wp
           retau_liq(j,ibox)=0._wp
           retau_ice(j,ibox)=0._wp
+          tau_phase_cum(j,ibox)=0._wp
+          tauf_phase_cum(j,ibox)=0._wp
+          phase_active(j,ibox)=.true.
 ! BMD 07/26 - end
         ENDDO
 15    CONTINUE
@@ -589,6 +624,47 @@
      &                     + dtau_s_liq(j,ilev)*reffl(j,ilev)
                         retau_ice(j,ibox)=retau_ice(j,ibox) &
      &                     + dtau_s_ice(j,ilev)*reffi(j,ilev)
+                 ENDIF
+              ENDDO
+            ENDDO ! ibox
+      ENDDO ! ilev
+
+      !Phase discrimination, ported from COSPv2's weight_by_extinction
+      !(modis_simulator.F90) via ~/COSPv2.0: the optical-depth-weighted mean
+      !liquid fraction over only the top modis_phase_taulimit (1.0) of cloud
+      !optical depth from cloud top, NOT tau_liq/tau_ice above (which are
+      !whole-subcolumn sums used only for the Reff weighting) -- a passive
+      !VIS/NIR sensor only sees the cloud-top phase. ilev=1..nlev is already
+      !TOA-to-surface (see pfull/phalf convention above), matching
+      !weight_by_extinction's implicit top-down ordering, so no extra flip
+      !is needed. phase_active freezes each (j,ibox) once its cumulative tau
+      !reaches modis_phase_taulimit, taking only the partial contribution
+      !from the crossing level -- the vectorized-over-npoints equivalent of
+      !weight_by_extinction's scalar "exit".
+      DO ilev=1,nlev
+            DO ibox=1,ncol
+              DO j=1,npoints
+                 IF (frac_out(j,ibox,ilev).eq.1._wp .and. &
+     &               phase_active(j,ibox)) THEN
+                    phase_tau_incr = dtau_s_liq(j,ilev) + dtau_s_ice(j,ilev)
+                    IF (phase_tau_incr .gt. 0._wp) THEN
+                       phase_f_liq = dtau_s_liq(j,ilev) / phase_tau_incr
+                       IF (tau_phase_cum(j,ibox)+phase_tau_incr .gt. &
+     &                     modis_phase_taulimit) THEN
+                          phase_deltatau = modis_phase_taulimit &
+     &                       - tau_phase_cum(j,ibox)
+                          tau_phase_cum(j,ibox) = tau_phase_cum(j,ibox) &
+     &                       + phase_deltatau
+                          tauf_phase_cum(j,ibox) = tauf_phase_cum(j,ibox) &
+     &                       + phase_deltatau*phase_f_liq
+                          phase_active(j,ibox) = .false.
+                       ELSE
+                          tau_phase_cum(j,ibox) = tau_phase_cum(j,ibox) &
+     &                       + phase_tau_incr
+                          tauf_phase_cum(j,ibox) = tauf_phase_cum(j,ibox) &
+     &                       + phase_tau_incr*phase_f_liq
+                       ENDIF
+                    ENDIF
                  ENDIF
               ENDDO
             ENDDO ! ibox
@@ -1294,9 +1370,13 @@
             !clwmodis+climodis
             cltmodis(j) = cltmodis(j) + boxarea
 
-            IF ( (tau_liq(j,ibox)+tau_ice(j,ibox)) .gt. (tauchk) ) THEN
-              liquid_fraction(j) = tau_liq(j,ibox) &
-     &          / (tau_liq(j,ibox)+tau_ice(j,ibox))
+            !cloud-top-weighted phase fraction (tau_phase_cum/tauf_phase_cum,
+            !ported from weight_by_extinction above) -- NOT the
+            !whole-subcolumn tau_liq/tau_ice sums, which remain in use only
+            !for the Reff weighting (box_reffl/box_reffi below)
+            IF ( tau_phase_cum(j,ibox) .gt. (tauchk) ) THEN
+              liquid_fraction(j) = tauf_phase_cum(j,ibox) &
+     &          / tau_phase_cum(j,ibox)
             ELSE
               liquid_fraction(j) = -1._wp
             ENDIF
