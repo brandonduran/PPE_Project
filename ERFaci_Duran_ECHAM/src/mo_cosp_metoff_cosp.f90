@@ -90,9 +90,9 @@ CONTAINS
   REAL(wp), INTENT(INOUT) :: dtau_s(kbdim,klev)
 ! BMD 07/26 - start
 !  liquid/ice-split counterpart of dtau_s, passed straight through to
-!  cosp_simulator's own dtau_s_liq/dtau_s_ice -- not sourced with real data
-!  here, COSP is a pass-through layer. See cosp_icarus.f90/
-!  mo_cosp_metoff_cosp_simulator.f90 BMD 07/26 notes.
+!  cosp_simulator's own dtau_s_liq/dtau_s_ice -- COSP itself is a
+!  pass-through layer, real data is sourced further up in
+!  mo_cosp_simulator.f90's call_cospsimulator.
   REAL(wp), INTENT(INOUT) :: dtau_s_liq(kbdim,klev)
   REAL(wp), INTENT(INOUT) :: dtau_s_ice(kbdim,klev)
 ! BMD 07/26 - end

@@ -33,12 +33,13 @@
 ! Cloned from mo_cosp_isccp_simulator.f90 as the starting point for a MODIS-style
 ! simulator wrapper: same ECHAM-grid <-> icarus level-flip pattern, extended with
 ! the liquid/ice-split optical depth, liquid/ice effective radius inputs and the
-! LWP-vs-ReffLiq / IWP-vs-ReffIce joint-histogram outputs added to the icarus
-! engine in cosp_icarus.f90. This file is not yet fully wired into the model:
-! the Lmodis_sim namelist switch and stream-field declarations in
-! mo_cosp_simulator.f90, sourcing dtau_s_liq/dtau_s_ice upstream, and the
-! mo_cosp_metoff_cosp.f90 caller passing the new arguments through, still need
-! to be added.
+! LWP-vs-ReffLiq / IWP-vs-ReffIce / tau-vs-CTP (all phases, liquid, ice)
+! joint-histogram outputs added to the icarus engine in cosp_icarus.f90. Wired
+! end-to-end: the Lmodis_sim namelist switch and stream-field declarations are
+! in mo_cosp_simulator.f90, dtau_s_liq/dtau_s_ice are sourced there from
+! cisccp_cldtau3d_liq/_ice (in turn from mo_psrad_interface.f90's
+! cld_tau_swl_vr/cld_tau_swi_vr), and mo_cosp_metoff_cosp.f90 passes
+! everything through. Still needs end-to-end run/output validation.
 !
 ! The underlying icarus engine is monolithic: it always computes the ISCCP
 ! tau/CTP histogram (fq_isccp) and its associated cloud-top-pressure/mean

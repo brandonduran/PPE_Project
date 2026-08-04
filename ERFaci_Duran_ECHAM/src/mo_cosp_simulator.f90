@@ -139,6 +139,10 @@ MODULE mo_cosp_simulator
 
   REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldtau3d  ! Cloud optical thickness
   REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldemi3d  ! Cloud emissivity @ 10.5 µm
+! BMD 07/26 - start
+  REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldtau3d_liq  ! Cloud optical thickness, liquid-only
+  REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldtau3d_ice  ! Cloud optical thickness, ice-only
+! BMD 07/26 - end
 
   REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cosp_f3d ! 3-d cloud fraction as seen in radiation
   
@@ -174,11 +178,14 @@ CONTAINS
     Lisccp_sim = .true.
 ! BMD 07/26 - start
     Lmodis_sim = .false.
-                          ! off by default: dtau_s_liq/dtau_s_ice (liquid/ice
-                          ! -split optical depth) are still zero-filled
-                          ! placeholders in call_cospsimulator, not sourced
-                          ! from real radiative diagnostics yet -- see the
-                          ! BMD 07/26 notes there and in mo_cosp_metoff_cosp.f90
+                          ! off by default: still needs end-to-end validation
+                          ! (see the BMD 07/26 notes in cosp_icarus.f90 and
+                          ! mo_cosp_modis_simulator.f90). Also note this
+                          ! subroutine only populates dtau_s/dem_s/skt/sh
+                          ! (and now dtau_s_liq/dtau_s_ice) under
+                          ! IF (Lisccp_sim) below, so Lmodis_sim currently
+                          ! needs Lisccp_sim = .true. too, or MODIS output
+                          ! will be all-zero regardless of this switch.
 ! BMD 07/26 - end
     Llidar_cfad = .false.
     l_fixed_reff = .false.
@@ -381,6 +388,14 @@ END SUBROUTINE cosp_initialize
       CALL add_stream_element (scosp, 'cisccp_emi3d', cisccp_cldemi3d, &
                            leveltype = HYBRID, lpost=extra_output, &
                            longname='COSP-ISCCP cloud optical thickness')
+! BMD 07/26 - start
+      CALL add_stream_element (scosp, 'cisccp_tau3d_liq', cisccp_cldtau3d_liq, &
+                           leveltype = HYBRID, lpost=extra_output,  &
+                           longname='COSP-ISCCP cloud optical thickness, liquid-only')
+      CALL add_stream_element (scosp, 'cisccp_tau3d_ice', cisccp_cldtau3d_ice, &
+                           leveltype = HYBRID, lpost=extra_output,  &
+                           longname='COSP-ISCCP cloud optical thickness, ice-only')
+! BMD 07/26 - end
 
       ALLOCATE(isccp_cldtypes(49))
       DO i=1,49
@@ -531,29 +546,23 @@ END SUBROUTINE cosp_initialize
 
 ! BMD 07/26 - start
 ! modis
-!  dtau_s_liq/dtau_s_ice are zero-filled placeholders for now -- no upstream
-!  radiative diagnostic populates them yet (see mo_cosp_metoff_cosp.f90 and
-!  cosp_icarus.f90 BMD 07/26 notes for the nearest candidate quantities,
-!  cld_tau_swl_vr/cld_tau_swi_vr in mo_psrad_interface.f90). Lmodis_sim
-!  defaults to .false. in cosp_initialize, so this is inert until both that
-!  data source and the namelist switch are turned on.
+!  liquid/ice-split counterpart of dtau_s, sourced from
+!  cisccp_cldtau3d_liq/_ice (populated in mo_psrad_interface.f90, from
+!  cld_tau_swl_vr/cld_tau_swi_vr) the same way dtau_s comes from
+!  cisccp_cldtau3d -- see the IF (Lisccp_sim) block below. Zero-filled by
+!  the reset above only as the default when Lisccp_sim (and therefore this
+!  whole populating block) is off; Lmodis_sim still defaults to .false. in
+!  cosp_initialize regardless.
     REAL(wp) :: dtau_s_liq(kproma,klev)
     REAL(wp) :: dtau_s_ice(kproma,klev)
     REAL(wp) :: fq_modis_lwp_reffl(kproma,7,8)
     REAL(wp) :: fq_modis_iwp_reffi(kproma,7,8)
-!  total/liquid/ice cloud fraction -- unlike the two joint histograms above,
-!  this only depends on total tau (already real data), not the liquid/ice
-!  split, so cltmodis should already be checkable even before dtau_s_liq/ice
-!  are sourced (clwmodis/climodis will read zero until then)
+!  total/liquid/ice cloud fraction (fraction of sunlit subcolumns)
     REAL(wp) :: cltmodis(kproma)
     REAL(wp) :: clwmodis(kproma)
     REAL(wp) :: climodis(kproma)
 !  joint histograms of optical thickness vs. cloud-top pressure (all
-!  phases, liquid-only, ice-only) -- BMD 07/26, second pass. CO2-slicing
-!  CTP retrieval only needs dtau_s (real data already), not dtau_s_liq/ice,
-!  so fq_modis_tau_ctp itself doesn't share the LWP/IWP histograms'
-!  zero-filled-placeholder caveat above; fq_modis_tau_ctp_liq/_ice do,
-!  since they need the same phase split.
+!  phases, liquid-only, ice-only)
     REAL(wp) :: fq_modis_tau_ctp(kproma,7,7)
     REAL(wp) :: fq_modis_tau_ctp_liq(kproma,7,7)
     REAL(wp) :: fq_modis_tau_ctp_ice(kproma,7,7)
@@ -745,6 +754,27 @@ END SUBROUTINE cosp_initialize
              END IF
           END DO
        END DO
+
+! BMD 07/26 - start
+!  liquid/ice-split counterpart of dtau_s, sourced from
+!  cisccp_cldtau3d_liq/_ice (mo_psrad_interface.f90) the same way dtau_s
+!  itself comes from cisccp_cldtau3d above -- same cosp_f3d>0 masking and
+!  TOA/surface level flip, so the MODIS LWP/IWP-vs-Reff and
+!  tau/CTP-Liq/Ice histograms (cosp_icarus.f90) get real data instead of
+!  the zero-filled placeholder this used to be.
+       DO jk=1,klev
+          jkb = klev+1-jk
+          DO jl=1,kproma
+             IF ( cosp_f3d(jl,jkb,jrow) .GT. 0._wp ) THEN
+                dtau_s_liq(jl,jk) = cisccp_cldtau3d_liq(jl,jkb,jrow)
+                dtau_s_ice(jl,jk) = cisccp_cldtau3d_ice(jl,jkb,jrow)
+             ELSE
+                dtau_s_liq(jl,jk) = 0._wp
+                dtau_s_ice(jl,jk) = 0._wp
+             END IF
+          END DO
+       END DO
+! BMD 07/26 - end
 
     END IF
   

@@ -90,10 +90,10 @@ CONTAINS
   REAL(wp), INTENT(INOUT) :: dtau_s(kbdim,klev)
 ! BMD 07/26 - start
 !  liquid/ice-split counterpart of dtau_s, needed by cosp_modis_simulator's
-!  LWP/IWP-vs-Reff histograms. Not yet sourced from anywhere upstream of this
-!  subroutine's caller (mo_cosp_metoff_cosp.f90's COSP) -- see cosp_icarus.f90
-!  BMD 07/26 notes for the nearest existing candidate quantities
-!  (cld_tau_swl_vr/cld_tau_swi_vr in mo_psrad_interface.f90).
+!  LWP/IWP-vs-Reff and tau/CTP-Liq/Ice histograms. Sourced in
+!  mo_cosp_simulator.f90's call_cospsimulator from cisccp_cldtau3d_liq/_ice
+!  (in turn from cld_tau_swl_vr/cld_tau_swi_vr in mo_psrad_interface.f90),
+!  passed straight through this pass-through layer.
   REAL(wp), INTENT(INOUT) :: dtau_s_liq(kbdim,klev)
   REAL(wp), INTENT(INOUT) :: dtau_s_ice(kbdim,klev)
 ! BMD 07/26 - end

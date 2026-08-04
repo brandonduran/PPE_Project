@@ -25,7 +25,8 @@ module mo_psrad_interface
        ONLY: radiation_subm_1, radiation_subm_2  
   USE mo_cosp_simulator,  ONLY: cosp_reffl, cosp_reffi,      &
                                 locosp, cosp_f3d, Lisccp_sim,&
-                                cisccp_cldtau3d, cisccp_cldemi3d
+                                cisccp_cldtau3d, cisccp_cldemi3d, &
+                                cisccp_cldtau3d_liq, cisccp_cldtau3d_ice
   USE mo_spec_sampling,   ONLY: spec_sampling_strategy, get_num_gpoints
   USE mo_random_numbers,  ONLY: seed_size_random
 
@@ -433,6 +434,18 @@ CONTAINS
           DO jl=1,kproma
             cisccp_cldtau3d(jl,jk,krow) = &
                  cld_tau_sw_vr(jl,jkb,9)  ! band 9 is 625 - 778 nm, needed is 670 nm
+! BMD 07/26 - start
+!  liquid/ice-split counterpart of cisccp_cldtau3d, for the MODIS
+!  LWP/IWP-vs-Reff and tau/CTP-Liq/Ice joint histograms (cosp_icarus.f90's
+!  dtau_s_liq/dtau_s_ice, sourced from these in mo_cosp_simulator.f90's
+!  call_cospsimulator). Unlike cod3dswl/cod3dswi below, this is NOT gated
+!  on laerocom_diag.AND.lHEaci -- COSP's own Lisccp_sim gate (this IF
+!  block) is the only precondition, matching cisccp_cldtau3d itself.
+            cisccp_cldtau3d_liq(jl,jk,krow) = &
+                 cld_tau_swl_vr(jl,jkb,9)
+            cisccp_cldtau3d_ice(jl,jk,krow) = &
+                 cld_tau_swi_vr(jl,jkb,9)
+! BMD 07/26 - end
 !>>DN
             IF (laerocom_diag.AND.lHEaci) THEN
                cod3dswl(jl,jk,krow) = &
