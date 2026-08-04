@@ -113,9 +113,9 @@ SUBROUTINE cosp_modis_simulator(                          &
 !  dtau_s_liq/dtau_s_ice are the phase-partitioned equivalent of the
 !  0.67 micron cld_tau_sw band used to build dtau_s (see mo_psrad_interface.f90,
 !  cld_tau_swl_vr/cld_tau_swi_vr); reffl/reffi are the same liquid/ice effective
-!  radii already threaded through mo_cosp_simulator.f90 as Reff(:,:,I_LSCLIQ/ICE)
-!  for the lidar path (in turn derived from cosp_reffl/cosp_reffi), just not yet
-!  passed down to the ISCCP/MODIS call site.
+!  radii threaded through mo_cosp_simulator.f90 as Reff(:,:,I_LSCLIQ/ICE) for
+!  the lidar path (in turn derived from cosp_reffl/cosp_reffi), sliced and
+!  passed down to this call site by mo_cosp_metoff_cosp_simulator.f90.
    REAL(wp), INTENT(INOUT) :: dtau_s_liq(kbdim,klev)
    REAL(wp), INTENT(INOUT) :: dtau_s_ice(kbdim,klev)
    REAL(wp), INTENT(INOUT) :: reffl(kbdim,klev)

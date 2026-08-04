@@ -89,13 +89,12 @@
 !     already adopted for the ICON MODIS-simulator port (cosp_config.F90,
 !     BMD 07/2026) so the two implementations stay directly comparable.
 !
-!     NOTE: this is a first step confined to cosp_icarus.f90. The new
-!     dummy arguments below (dtau_s_liq, dtau_s_ice, reffl, reffi,
-!     fq_modis_lwp_reffl, fq_modis_iwp_reffi) still need to be threaded
-!     through mo_cosp_isccp_simulator.f90, mo_cosp_metoff_cosp_simulator.f90
-!     and mo_cosp_simulator.f90 (namelist switch, stream fields, unpacking)
-!     before this compiles/runs end-to-end -- see the existing call site in
-!     mo_cosp_isccp_simulator.f90, which will need updating to match.
+!     Wired end-to-end: mo_cosp_modis_simulator.f90 is the dedicated MODIS
+!     call site (passing this whole trailing argument group), while
+!     mo_cosp_isccp_simulator.f90's pre-existing ISCCP-only call site omits
+!     it -- safe because these 9 dummy arguments (plus the tau/CTP group
+!     added in a second pass, further below) are all OPTIONAL and every
+!     code block that touches them is gated on PRESENT(...).
 
       INTEGER, PARAMETER :: n_modis_lwp = 7, n_modis_iwp = 7 ! number of MODIS LWP, IWP bins
       INTEGER, PARAMETER :: n_modis_reffl = 8, n_modis_reffi = 8 ! number of MODIS effective radius (liquid,ice) bins
