@@ -142,6 +142,8 @@ MODULE mo_cosp_simulator
 ! BMD 07/26 - start
   REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldtau3d_liq  ! Cloud optical thickness, liquid-only
   REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldtau3d_ice  ! Cloud optical thickness, ice-only
+  REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldpiz3d_nir  ! Near-IR (3.7um, band 1) single-scattering albedo
+  REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cisccp_cldcg3d_nir   ! Near-IR (3.7um, band 1) asymmetry parameter
 ! BMD 07/26 - end
 
   REAL(wp), PUBLIC,  POINTER, DIMENSION(:,:,:) :: cosp_f3d ! 3-d cloud fraction as seen in radiation
@@ -394,16 +396,20 @@ END SUBROUTINE cosp_initialize
    END IF!Lisccp_sim
 
 ! BMD 07/26 - start
-!  cisccp_tau3d/emi3d/_liq/_ice are shared upstream plumbing (see the
-!  mo_psrad_interface.f90 BMD 07/26 note), read by cosp_modis_simulator's
-!  dtau_s/dem_s/dtau_s_liq/dtau_s_ice sourcing (call_cospsimulator below)
-!  as well as ISCCP's own dtau_s/dem_s -- hoisted out of the strict
-!  Lisccp_sim block above so Lmodis_sim=.true., Lisccp_sim=.false. still
-!  allocates them (POINTERs, not ALLOCATABLE -- unassociated otherwise,
-!  which mo_psrad_interface.f90 would then write through and crash).
-!  lpost=extra_output already controls whether these are actually written
-!  to output, independent of either switch, so widening the allocation
-!  gate here has no effect on what appears in a MODIS-only user's output.
+!  cisccp_tau3d/emi3d/_liq/_ice/piz3d_nir/cg3d_nir are shared upstream
+!  plumbing (see the mo_psrad_interface.f90 BMD 07/26 note), read by
+!  cosp_modis_simulator's dtau_s/dem_s/dtau_s_liq/dtau_s_ice sourcing
+!  (call_cospsimulator below) as well as ISCCP's own dtau_s/dem_s --
+!  hoisted out of the strict Lisccp_sim block above so Lmodis_sim=.true.,
+!  Lisccp_sim=.false. still allocates them (POINTERs, not ALLOCATABLE --
+!  unassociated otherwise, which mo_psrad_interface.f90 would then write
+!  through and crash). lpost=extra_output already controls whether these
+!  are actually written to output, independent of either switch, so
+!  widening the allocation gate here has no effect on what appears in a
+!  MODIS-only user's output. piz3d_nir/cg3d_nir (near-IR single-scattering
+!  albedo/asymmetry) are new (BMD 07/26, third pass): input to the planned
+!  simulated-reflectance MODIS size retrieval in cosp_icarus.f90, not yet
+!  wired past call_cospsimulator's dpiz_s_nir/dcg_s_nir below.
    IF (Lisccp_sim .OR. Lmodis_sim) THEN
       CALL add_stream_element (scosp, 'cisccp_tau3d', cisccp_cldtau3d, &
                            leveltype = HYBRID, lpost=extra_output,  &
@@ -417,6 +423,12 @@ END SUBROUTINE cosp_initialize
       CALL add_stream_element (scosp, 'cisccp_tau3d_ice', cisccp_cldtau3d_ice, &
                            leveltype = HYBRID, lpost=extra_output,  &
                            longname='COSP-ISCCP cloud optical thickness, ice-only')
+      CALL add_stream_element (scosp, 'cisccp_piz3d_nir', cisccp_cldpiz3d_nir, &
+                           leveltype = HYBRID, lpost=extra_output,  &
+                           longname='COSP-MODIS near-IR (3.7um) single-scattering albedo')
+      CALL add_stream_element (scosp, 'cisccp_cg3d_nir', cisccp_cldcg3d_nir, &
+                           leveltype = HYBRID, lpost=extra_output,  &
+                           longname='COSP-MODIS near-IR (3.7um) asymmetry parameter')
    END IF!Lisccp_sim .OR. Lmodis_sim
 ! BMD 07/26 - end
 
@@ -569,6 +581,14 @@ END SUBROUTINE cosp_initialize
 !  cosp_initialize regardless.
     REAL(wp) :: dtau_s_liq(kproma,klev)
     REAL(wp) :: dtau_s_ice(kproma,klev)
+!  near-IR (3.7um, band 1) single-scattering albedo/asymmetry parameter,
+!  sourced from cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir the same way
+!  dtau_s_liq/dtau_s_ice come from cisccp_cldtau3d_liq/_ice -- input to
+!  the planned simulated-reflectance MODIS size retrieval in
+!  cosp_icarus.f90 (BMD 07/26, third pass). Not yet passed to CALL cosp()
+!  below: icarus/cosp_modis_simulator don't have dummy args for these yet.
+    REAL(wp) :: dpiz_s_nir(kproma,klev)
+    REAL(wp) :: dcg_s_nir(kproma,klev)
     REAL(wp) :: fq_modis_lwp_reffl(kproma,7,8)
     REAL(wp) :: fq_modis_iwp_reffi(kproma,7,8)
 !  total/liquid/ice cloud fraction (fraction of sunlit subcolumns)
@@ -657,6 +677,8 @@ END SUBROUTINE cosp_initialize
 !modis
     dtau_s_liq         = 0.0_wp
     dtau_s_ice         = 0.0_wp
+    dpiz_s_nir         = 0.0_wp
+    dcg_s_nir          = 0.0_wp
     fq_modis_lwp_reffl = 0.0_wp
     fq_modis_iwp_reffi = 0.0_wp
     cltmodis           = 0.0_wp
@@ -791,6 +813,27 @@ END SUBROUTINE cosp_initialize
              ELSE
                 dtau_s_liq(jl,jk) = 0._wp
                 dtau_s_ice(jl,jk) = 0._wp
+             END IF
+          END DO
+       END DO
+
+!  Near-IR single-scattering albedo/asymmetry, sourced from
+!  cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir the same way. The ELSE-branch
+!  default (0._wp) is a placeholder, not a physically meaningful clear-sky
+!  value (mo_cloud_optics.f90 itself defaults omg/asy to 1.0/0.0 for
+!  non-cloudy levels) -- harmless because the planned reflectance
+!  calculation (cosp_icarus.f90) will gate on dtau_s(j,ilev)>0 the same
+!  way COSPv2's compute_toa_reflectace gates on tau>0, so dpiz_s_nir/
+!  dcg_s_nir are never actually read at a level where this default matters.
+       DO jk=1,klev
+          jkb = klev+1-jk
+          DO jl=1,kproma
+             IF ( cosp_f3d(jl,jkb,jrow) .GT. 0._wp ) THEN
+                dpiz_s_nir(jl,jk) = cisccp_cldpiz3d_nir(jl,jkb,jrow)
+                dcg_s_nir(jl,jk)  = cisccp_cldcg3d_nir(jl,jkb,jrow)
+             ELSE
+                dpiz_s_nir(jl,jk) = 0._wp
+                dcg_s_nir(jl,jk)  = 0._wp
              END IF
           END DO
        END DO

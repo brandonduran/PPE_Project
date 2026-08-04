@@ -27,7 +27,8 @@ module mo_psrad_interface
                                 locosp, cosp_f3d, Lisccp_sim,&
                                 Lmodis_sim,                  &
                                 cisccp_cldtau3d, cisccp_cldemi3d, &
-                                cisccp_cldtau3d_liq, cisccp_cldtau3d_ice
+                                cisccp_cldtau3d_liq, cisccp_cldtau3d_ice, &
+                                cisccp_cldpiz3d_nir, cisccp_cldcg3d_nir
   USE mo_spec_sampling,   ONLY: spec_sampling_strategy, get_num_gpoints
   USE mo_random_numbers,  ONLY: seed_size_random
 
@@ -457,6 +458,27 @@ CONTAINS
                  cld_tau_swl_vr(jl,jkb,9)
             cisccp_cldtau3d_ice(jl,jk,krow) = &
                  cld_tau_swi_vr(jl,jkb,9)
+! BMD 07/26 - end
+
+! BMD 07/26 - start
+!  Near-IR (3.7 micron) single-scattering albedo/asymmetry parameter, for
+!  the MODIS simulated-reflectance size retrieval (cosp_icarus.f90's
+!  planned two_stream/adding_doubling port -- ports COSPv2's
+!  compute_toa_reflectace, modis_simulator.F90). Band 1 is RRTMG global
+!  band 16 (2600-3250 cm-1 = 3.08-3.85 micron, see mo_srtm_setup.f90's
+!  wavenum1/wavenum2), confirmed via COSP's own release notes (COSP 1.4.1,
+!  Jan 2017, cfmip.org/tools-and-data/cosp) to be the correct proxy for
+!  the Collection-6 3.7 micron retrieval channel get_g_nir/get_ssa_nir are
+!  fit to -- NOT MODIS band 7 (2.1 micron), despite modis_simulator.F90's
+!  own (stale, copy-pasted from the Collection-5 get_g_nir_old/
+!  get_ssa_nir_old docstring) "band 7" comment. cld_piz_sw_vr/cld_cg_sw_vr
+!  reindex 1:nb_sw <- global 16:29 identically to cld_tau_sw_vr (confirmed
+!  in mo_cloud_optics.f90: omg/asy get the same `zomg/zasy(...,16:29)`
+!  treatment as tau_sw), so index 1 here is unambiguously global band 16.
+            cisccp_cldpiz3d_nir(jl,jk,krow) = &
+                 cld_piz_sw_vr(jl,jkb,1)
+            cisccp_cldcg3d_nir(jl,jk,krow) = &
+                 cld_cg_sw_vr(jl,jkb,1)
 ! BMD 07/26 - end
 !>>DN
             IF (laerocom_diag.AND.lHEaci) THEN
