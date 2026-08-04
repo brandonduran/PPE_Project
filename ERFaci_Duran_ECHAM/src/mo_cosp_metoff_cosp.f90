@@ -20,13 +20,16 @@ CONTAINS
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !--------------------- SUBROUTINE COSP ----------------------------
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- SUBROUTINE COSP( kbdim, klev, Ncolumns,                       & 
+ SUBROUTINE COSP( kbdim, klev, Ncolumns,                       &
                   Lisccp_sim,  Llidar_sim, Llidar_cfad,  Lstats,            &
+! BMD 07/26 - start
+                  Lmodis_sim,                                  &
+! BMD 07/26 - end
 !gbx
                   use_reff, lidar_ice_type,                    &
                   isccp_top_heigh, isccp_top_height_direction, &
                   isccp_overlap, isccp_emsfc_lw,               &
-                  ph, p, T, Reff, tca,                         &             
+                  ph, p, T, Reff, tca,                         &
                   psfc, mr_hydro, sh, dem_s, dtau_s,           &
                   sunlit, skt, zlev, zlev_half, land,          &
 !sglidar
@@ -38,7 +41,14 @@ CONTAINS
                   fq_isccp,  totalcldarea,                     &
                   meanptop,  meantaucld,                       &
                   meantb, meantbclr, boxtau,  boxptop,         &
-                  meanalbedocld                                )
+                  meanalbedocld,                                &
+! BMD 07/26 - start
+!modis
+                  dtau_s_liq, dtau_s_ice,                      &
+                  fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
+                  cltmodis, clwmodis, climodis                &
+! BMD 07/26 - end
+                                                                )
   ! Arguments
 
 
@@ -46,6 +56,9 @@ CONTAINS
   LOGICAL, INTENT(IN) ::  Llidar_sim
   LOGICAL, INTENT(IN) ::  Llidar_cfad
   LOGICAL, INTENT(IN) ::  Lstats
+! BMD 07/26 - start
+  LOGICAL, INTENT(IN) ::  Lmodis_sim
+! BMD 07/26 - end
 
 !gbx
   LOGICAL, INTENT(IN) :: use_reff
@@ -73,6 +86,14 @@ CONTAINS
   REAL(wp), INTENT(INOUT) :: sh(kbdim,klev)
   REAL(wp), INTENT(INOUT) :: dem_s(kbdim,klev)
   REAL(wp), INTENT(INOUT) :: dtau_s(kbdim,klev)
+! BMD 07/26 - start
+!  liquid/ice-split counterpart of dtau_s, passed straight through to
+!  cosp_simulator's own dtau_s_liq/dtau_s_ice -- not sourced with real data
+!  here, COSP is a pass-through layer. See cosp_icarus.f90/
+!  mo_cosp_metoff_cosp_simulator.f90 BMD 07/26 notes.
+  REAL(wp), INTENT(INOUT) :: dtau_s_liq(kbdim,klev)
+  REAL(wp), INTENT(INOUT) :: dtau_s_ice(kbdim,klev)
+! BMD 07/26 - end
   REAL(wp), INTENT(INOUT) :: sunlit(kbdim)
   REAL(wp), INTENT(INOUT) :: skt(kbdim)
   REAL(wp), INTENT(INOUT) :: zlev(kbdim,klev)
@@ -91,7 +112,19 @@ CONTAINS
   REAL(wp) :: meantb(kbdim), meantbclr(kbdim)
   REAL(wp) :: boxtau(kbdim,Ncolumns), boxptop(kbdim,Ncolumns)
   REAL(wp) :: meanalbedocld(kbdim)
-    
+
+! BMD 07/26 - start
+! modis
+!  bin counts (7,8 / 7,8) must match n_modis_lwp/n_modis_reffl/etc. declared
+!  in cosp_icarus.f90 -- see the note in mo_cosp_modis_simulator.f90
+  REAL(wp) :: fq_modis_lwp_reffl(kbdim,7,8)
+  REAL(wp) :: fq_modis_iwp_reffi(kbdim,7,8)
+!  total/liquid/ice cloud fraction (fraction of sunlit subcolumns)
+  REAL(wp) :: cltmodis(kbdim)
+  REAL(wp) :: clwmodis(kbdim)
+  REAL(wp) :: climodis(kbdim)
+! BMD 07/26 - end
+
 ! stlidar lidar stats
   REAL(wp) :: srbval(SR_BINS)
   REAL(wp) :: cfad_sr(kbdim,SR_BINS,Nlr) 
@@ -219,16 +252,19 @@ CONTAINS
   !++++++++++ Simulator ++++++++++
   call cosp_simulator(kbdim,Ncolumns,klev,      &
        Lisccp_sim,  Llidar_sim, Llidar_cfad, Lstats,        &
-!gbx 
+! BMD 07/26 - start
+       Lmodis_sim,                                  &
+! BMD 07/26 - end
+!gbx
        lidar_ice_type,                              &
        isccp_top_heigh, isccp_top_height_direction, &
        isccp_overlap, isccp_emsfc_lw,               &
-       ph, p, T, Reff, tca,                         &             
+       ph, p, T, Reff, tca,                         &
        sh, dem_s, dtau_s,                           &
        sunlit, skt, zlev, zlev_half, land,          &
 !sgx
       frac_out,                                     &
-      sg_mr_hydro,                                  & 
+      sg_mr_hydro,                                  &
 !sglidar
        beta_mol, beta_tot, refl, tau_tot,          &
 !stlidar
@@ -236,9 +272,15 @@ CONTAINS
       cldlayer, parasolrefl,                       &
 !isccp
       fq_isccp,  totalcldarea,                     &
-      meanptop,  meantaucld,                       &              
+      meanptop,  meantaucld,                       &
       meantb, meantbclr, boxtau,  boxptop, &
-      meanalbedocld )
+      meanalbedocld,                                &
+! BMD 07/26 - start
+!modis
+      dtau_s_liq, dtau_s_ice,                      &
+      fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
+      cltmodis, clwmodis, climodis )
+! BMD 07/26 - end
 
  
 END SUBROUTINE COSP

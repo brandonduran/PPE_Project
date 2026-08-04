@@ -61,6 +61,9 @@ MODULE mo_cosp_simulator
 
   LOGICAL :: locosp = .FALSE.     ! Doing satellite output?
   LOGICAL, SAVE :: Llidar_sim,Lisccp_sim,Lstats,Llidar_cfad
+! BMD 07/26 - start
+  LOGICAL, SAVE :: Lmodis_sim
+! BMD 07/26 - end
   LOGICAL :: l_fixed_reff ! use fixed effective radii for testing only
   LOGICAL :: extra_output
   LOGICAL :: use_netcdf
@@ -82,8 +85,14 @@ MODULE mo_cosp_simulator
     
   TYPE (vmem3d), PRIVATE, POINTER :: cosp_cfadsr(:)
                                              ! COSP CFADSR for the 15 srbins of lidar scattering ratio
-  TYPE (vmem2d), PRIVATE, POINTER :: isccp_cldtypes(:)   
+  TYPE (vmem2d), PRIVATE, POINTER :: isccp_cldtypes(:)
                                              ! ISCCP cloud fraction for the 49 ISCCP cloud types
+! BMD 07/26 - start
+  TYPE (vmem2d), PRIVATE, POINTER :: modis_lwp_reffl_types(:)
+                                             ! MODIS LWP-vs-ReffLiq joint histogram, 56 = 7x8 bins flattened
+  TYPE (vmem2d), PRIVATE, POINTER :: modis_iwp_reffi_types(:)
+                                             ! MODIS IWP-vs-ReffIce joint histogram, 56 = 7x8 bins flattened
+! BMD 07/26 - end
   TYPE (vmem2d), PRIVATE, POINTER :: cosp_parasol_refl(:)   
                                              ! PARASOL reflectance for 5 bins of solar zenith angle
 
@@ -91,6 +100,12 @@ MODULE mo_cosp_simulator
   REAL(wp), PRIVATE, POINTER :: cosp_isccp_meanptop(:,:)      ! mean ISCCP cloud top pressure
   REAL(wp), PRIVATE, POINTER :: cosp_isccp_meanalbedocld(:,:) ! mean ISCCP cloud albedo
   REAL(wp), PRIVATE, POINTER :: cosp_isccp_meantaucld(:,:)    ! mean ISCCP cloud optical thickness
+
+! BMD 07/26 - start
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_totalcloud(:,:)    ! MODIS total cloud fraction (cltmodis)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_watercloud(:,:)    ! MODIS liquid cloud fraction (clwmodis)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_icecloud(:,:)      ! MODIS ice cloud fraction (climodis)
+! BMD 07/26 - end
 
   REAL(wp), PRIVATE, POINTER :: cosp_calipso_cloud_fraction(:,:,:) ! COSP Cloud frequency of occurance as seen by CALIPSO
   REAL(wp), PRIVATE, POINTER :: cosp_lidar_lowcloud(:,:)           ! COSP Low-level cloud cover from CALIPSO  
@@ -143,11 +158,22 @@ CONTAINS
    INTEGER :: ierr, inml, iunit
 
    NAMELIST /cospctl/ locosp,  Llidar_sim, Llidar_cfad, Lisccp_sim, &
+! BMD 07/26 - start
+                       Lmodis_sim, &
+! BMD 07/26 - end
                        l_fixed_reff, Ncolumns,extra_output, use_netcdf, &
                        offl2dout
 
     Llidar_sim = .true.
     Lisccp_sim = .true.
+! BMD 07/26 - start
+    Lmodis_sim = .false.
+                          ! off by default: dtau_s_liq/dtau_s_ice (liquid/ice
+                          ! -split optical depth) are still zero-filled
+                          ! placeholders in call_cospsimulator, not sourced
+                          ! from real radiative diagnostics yet -- see the
+                          ! BMD 07/26 notes there and in mo_cosp_metoff_cosp.f90
+! BMD 07/26 - end
     Llidar_cfad = .false.
     l_fixed_reff = .false.
     extra_output = .false.
@@ -175,6 +201,9 @@ CONTAINS
          CALL p_bcast (Llidar_sim, p_io)
          CALL p_bcast (Llidar_cfad, p_io)
          CALL p_bcast (Lisccp_sim, p_io)
+! BMD 07/26 - start
+         CALL p_bcast (Lmodis_sim, p_io)
+! BMD 07/26 - end
          CALL p_bcast (l_fixed_reff, p_io)
          CALL p_bcast (Ncolumns, p_io)
          CALL p_bcast (extra_output, p_io)
@@ -356,6 +385,33 @@ END SUBROUTINE cosp_initialize
 
    END IF!Lisccp_sim
 
+! BMD 07/26 - start
+   IF (Lmodis_sim) THEN
+
+      CALL add_stream_element (scosp, 'cltmodis', cosp_modis_totalcloud,  &
+                           longname='MODIS total cloud area fraction', units='1')
+      CALL add_stream_element (scosp, 'clwmodis', cosp_modis_watercloud,  &
+                           longname='MODIS liquid cloud area fraction', units='1')
+      CALL add_stream_element (scosp, 'climodis', cosp_modis_icecloud,  &
+                           longname='MODIS ice cloud area fraction', units='1')
+
+      ALLOCATE(modis_lwp_reffl_types(56))
+      DO i=1,56
+            WRITE(name, '(a8,i2.2)') 'modislwp',i
+         CALL add_stream_element (scosp, name, modis_lwp_reffl_types(i)%ptr2,  &
+                longname='Fraction covered by MODIS LWP-ReffLiq joint-histogram type')
+      ENDDO
+
+      ALLOCATE(modis_iwp_reffi_types(56))
+      DO i=1,56
+            WRITE(name, '(a8,i2.2)') 'modisiwp',i
+         CALL add_stream_element (scosp, name, modis_iwp_reffi_types(i)%ptr2,  &
+                longname='Fraction covered by MODIS IWP-ReffIce joint-histogram type')
+      ENDDO
+
+   END IF!Lmodis_sim
+! BMD 07/26 - end
+
   END SUBROUTINE construct_stream_cosp
 
 !--------------------------------------------------------------------------------------------------------------------
@@ -446,6 +502,27 @@ END SUBROUTINE cosp_initialize
     REAL(wp) :: boxtau(kproma,Ncolumns), boxptop(kproma,Ncolumns)
     REAL(wp) :: meanalbedocld(kproma)
 
+! BMD 07/26 - start
+! modis
+!  dtau_s_liq/dtau_s_ice are zero-filled placeholders for now -- no upstream
+!  radiative diagnostic populates them yet (see mo_cosp_metoff_cosp.f90 and
+!  cosp_icarus.f90 BMD 07/26 notes for the nearest candidate quantities,
+!  cld_tau_swl_vr/cld_tau_swi_vr in mo_psrad_interface.f90). Lmodis_sim
+!  defaults to .false. in cosp_initialize, so this is inert until both that
+!  data source and the namelist switch are turned on.
+    REAL(wp) :: dtau_s_liq(kproma,klev)
+    REAL(wp) :: dtau_s_ice(kproma,klev)
+    REAL(wp) :: fq_modis_lwp_reffl(kproma,7,8)
+    REAL(wp) :: fq_modis_iwp_reffi(kproma,7,8)
+!  total/liquid/ice cloud fraction -- unlike the two joint histograms above,
+!  this only depends on total tau (already real data), not the liquid/ice
+!  split, so cltmodis should already be checkable even before dtau_s_liq/ice
+!  are sourced (clwmodis/climodis will read zero until then)
+    REAL(wp) :: cltmodis(kproma)
+    REAL(wp) :: clwmodis(kproma)
+    REAL(wp) :: climodis(kproma)
+! BMD 07/26 - end
+
     INTEGER:: k,j,i, itau, ipres, jk, jkb, jl
 
     !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -516,6 +593,17 @@ END SUBROUTINE cosp_initialize
     boxtau       = 0.0_wp
     boxptop      = 0.0_wp
     meanalbedocld= 0.0_wp
+
+! BMD 07/26 - start
+!modis
+    dtau_s_liq         = 0.0_wp
+    dtau_s_ice         = 0.0_wp
+    fq_modis_lwp_reffl = 0.0_wp
+    fq_modis_iwp_reffi = 0.0_wp
+    cltmodis           = 0.0_wp
+    clwmodis           = 0.0_wp
+    climodis           = 0.0_wp
+! BMD 07/26 - end
 
 !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -660,11 +748,14 @@ END SUBROUTINE cosp_initialize
     !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     CALL cosp(kproma,klev, Ncolumns,                        &
               Lisccp_sim,  Llidar_sim, Llidar_cfad, Lstats,        &
+! BMD 07/26 - start
+              Lmodis_sim,                                  &
+! BMD 07/26 - end
 !gbx
               use_reff, lidar_ice_type,                    &
               isccp_top_height, isccp_top_height_direction, &
               isccp_overlap, isccp_emsfc_lw,               &
-              ph_l, p_l, T, Reff, tca,                     &             
+              ph_l, p_l, T, Reff, tca,                     &
               psfc, mr_hydro, sh, dem_s, dtau_s,           &
               sunlit, skt, zlev, zlev_half, land,          &
 !sglidar
@@ -676,7 +767,13 @@ END SUBROUTINE cosp_initialize
               fq_isccp,  totalcldarea,                     &
               meanptop,  meantaucld,                       &
               meantb, meantbclr, boxtau,  boxptop,         &
-              meanalbedocld                                )
+              meanalbedocld,                                &
+! BMD 07/26 - start
+!modis
+              dtau_s_liq, dtau_s_ice,                      &
+              fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
+              cltmodis, clwmodis, climodis )
+! BMD 07/26 - end
    
 
     DO j=1,kproma
@@ -779,6 +876,36 @@ END SUBROUTINE cosp_initialize
        ENDDO
 
     END IF
+
+! BMD 07/26 - start
+    IF (Lmodis_sim) THEN
+
+       DO j=1,kproma
+          cosp_modis_totalcloud(j,jrow) = cosp_modis_totalcloud(j,jrow) + cltmodis(j) *  od_cosp
+          cosp_modis_watercloud(j,jrow) = cosp_modis_watercloud(j,jrow) + clwmodis(j) *  od_cosp
+          cosp_modis_icecloud(j,jrow)   = cosp_modis_icecloud(j,jrow)   + climodis(j) *  od_cosp
+       ENDDO
+
+       i=0
+       DO itau=1,7
+          DO ipres=1,8
+             i=i+1
+             ct => modis_lwp_reffl_types(i)%ptr2
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_lwp_reffl(1:kproma,itau,ipres)  *  od_cosp
+          ENDDO
+       ENDDO
+
+       i=0
+       DO itau=1,7
+          DO ipres=1,8
+             i=i+1
+             ct => modis_iwp_reffi_types(i)%ptr2
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_iwp_reffi(1:kproma,itau,ipres)  *  od_cosp
+          ENDDO
+       ENDDO
+
+    END IF
+! BMD 07/26 - end
 
   END SUBROUTINE call_cospsimulator
 !--------------------------------------------------------------------------------------------------------------------

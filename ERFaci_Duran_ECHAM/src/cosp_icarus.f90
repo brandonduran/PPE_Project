@@ -22,7 +22,12 @@
      &     meantb, &
      &     meantbclr, &
      &     boxtau, &
-     &     boxptop &
+     &     boxptop, &
+! BMD 07/26 - start
+     &     dtau_s_liq, dtau_s_ice, reffl, reffi, &
+     &     fq_modis_lwp_reffl, fq_modis_iwp_reffi, &
+     &     cltmodis, clwmodis, climodis &
+! BMD 07/26 - end
      &)
 
      USE mo_kind,  ONLY: wp
@@ -71,7 +76,57 @@
 !             the following parameter statement
 
       INTEGER :: ncolprint
-      
+
+! BMD 07/26 - start
+!     Bin-table parameters for two new MODIS-style joint histograms:
+!     liquid water path (LWP) vs. liquid effective radius (ReffLiq), and
+!     ice water path (IWP) vs. ice effective radius (ReffIce). These use
+!     the Stephens (1978) bulk approximation CWP = (2/3)*rho*re*tau, the
+!     same relation COSP's own modis_simulator.F90 uses, rather than the
+!     brightness-temperature/cloud-top-pressure machinery below that is
+!     specific to the ISCCP tau/CTP histogram. Bin edges mirror the ones
+!     already adopted for the ICON MODIS-simulator port (cosp_config.F90,
+!     BMD 07/2026) so the two implementations stay directly comparable.
+!
+!     NOTE: this is a first step confined to cosp_icarus.f90. The new
+!     dummy arguments below (dtau_s_liq, dtau_s_ice, reffl, reffi,
+!     fq_modis_lwp_reffl, fq_modis_iwp_reffi) still need to be threaded
+!     through mo_cosp_isccp_simulator.f90, mo_cosp_metoff_cosp_simulator.f90
+!     and mo_cosp_simulator.f90 (namelist switch, stream fields, unpacking)
+!     before this compiles/runs end-to-end -- see the existing call site in
+!     mo_cosp_isccp_simulator.f90, which will need updating to match.
+
+      INTEGER, PARAMETER :: n_modis_lwp = 7, n_modis_iwp = 7 ! number of MODIS LWP, IWP bins
+      INTEGER, PARAMETER :: n_modis_reffl = 8, n_modis_reffi = 8 ! number of MODIS effective radius (liquid,ice) bins
+
+      REAL(wp), PARAMETER :: modis_lwp_bin_edges(n_modis_lwp+1) = &
+     &  (/ 0._wp, 0.01_wp, 0.03_wp, 0.06_wp, 0.10_wp, 0.15_wp, 0.25_wp, 20._wp /)     ! kg m-2
+      REAL(wp), PARAMETER :: modis_iwp_bin_edges(n_modis_iwp+1) = &
+     &  (/ 0._wp, 0.02_wp, 0.05_wp, 0.10_wp, 0.20_wp, 0.40_wp, 1.00_wp, 20._wp /)     ! kg m-2
+      REAL(wp), PARAMETER :: modis_reffl_bin_edges(n_modis_reffl+1) = &
+     &  (/ 0._wp, 4.e-6_wp, 8.e-6_wp, 1.0e-5_wp, 1.25e-5_wp, 1.5e-5_wp, &
+     &     2.0e-5_wp, 3.0e-5_wp, 1.0e-2_wp /)                                        ! m
+      REAL(wp), PARAMETER :: modis_reffi_bin_edges(n_modis_reffi+1) = &
+     &  (/ 0._wp, 5.e-6_wp, 1.0e-5_wp, 2.0e-5_wp, 3.0e-5_wp, 4.0e-5_wp, &
+     &     5.0e-5_wp, 6.0e-5_wp, 1.0e-2_wp /)                                        ! m
+
+      REAL(wp), PARAMETER :: modis_lwp_conversion = (2._wp/3._wp)*1000._wp   ! rho_liquid [kg/m3]
+      REAL(wp), PARAMETER :: modis_ice_density    = 0.93_wp                  ! relative to liquid
+
+!     Phase is decided once per subcolumn (not independently per phase): a subcolumn is liquid-dominated,
+!     ice-dominated, or excluded from both
+!     histograms.
+      REAL(wp), PARAMETER :: modis_phase_threshold = 0.7_wp
+
+!     Minimum detectable optical thickness for the whole MODIS block below
+!     (cloud-fraction outputs AND the LWP/IWP-vs-Reff histograms): matches
+!     real COSP's min_OpticalThickness (cosp_modis_interface.F90's
+!     COSP_MODIS_INIT in ~/COSPv2.0), not the tiny tauchk epsilon used by the
+!     ISCCP tau/CTP histogram above. A subcolumn with tau(j,ibox) below this
+!     is not MODIS-visible at all, regardless of phase.
+      REAL(wp), PARAMETER :: modis_min_optical_thickness = 0.3_wp
+! BMD 07/26 - end
+
 !     -----
 !     Input 
 !     -----
@@ -110,6 +165,25 @@
                   !  with the 0 cloud optical depth of the clear
                   !         part of the grid box
 
+! BMD 07/26 - start
+!     OPTIONAL: callers that don't want the MODIS-style histograms below
+!     (e.g. mo_cosp_isccp_simulator.f90's ISCCP-only call site) can omit
+!     this whole trailing group of 9 arguments. Every code block below that
+!     touches any of them is gated on PRESENT(...), so it's illegal/unsafe
+!     to reference one of these without checking PRESENT first.
+      REAL(wp), OPTIONAL :: dtau_s_liq(npoints,nlev)
+                  !  liquid-only component of dtau_s (0.67 micron optical
+                  !  depth of the cloudy part of the grid box), used to
+                  !  build the MODIS-style LWP-vs-ReffLiq joint histogram
+      REAL(wp), OPTIONAL :: dtau_s_ice(npoints,nlev)
+                  !  ice-only component of dtau_s, used to build the
+                  !  MODIS-style IWP-vs-ReffIce joint histogram
+      REAL(wp), OPTIONAL :: reffl(npoints,nlev)
+                  !  liquid cloud droplet effective radius (m) on full
+                  !  model levels
+      REAL(wp), OPTIONAL :: reffi(npoints,nlev)
+                  !  ice crystal effective radius (m) on full model levels
+! BMD 07/26 - end
 
       INTEGER :: overlap                   !  overlap type
                               !  1=max
@@ -199,8 +273,31 @@
       REAL(wp) :: boxtau(npoints,ncol)         !  optical thickness in each column
       
       REAL(wp) :: boxptop(npoints,ncol)        !  cloud top pressure (mb) in each column
-                              
-                                                                                          
+
+! BMD 07/26 - start
+!     OPTIONAL: see the note by dtau_s_liq above -- omit this whole group
+!     together when the caller doesn't want MODIS output.
+      REAL(wp), OPTIONAL :: fq_modis_lwp_reffl(npoints,n_modis_lwp,n_modis_reffl)
+                  !  joint histogram of liquid water path vs. liquid
+                  !  effective radius, fraction of model grid box
+      REAL(wp), OPTIONAL :: fq_modis_iwp_reffi(npoints,n_modis_iwp,n_modis_reffi)
+                  !  joint histogram of ice water path vs. ice
+                  !  effective radius, fraction of model grid box
+      REAL(wp), OPTIONAL :: cltmodis(npoints)
+                  !  MODIS total cloud fraction: fraction of sunlit
+                  !  subcolumns with tau >= modis_min_optical_thickness,
+                  !  regardless of phase determination outcome (so this is
+                  !  NOT simply clwmodis+climodis -- undetermined-phase
+                  !  subcolumns count here but not in either of those)
+      REAL(wp), OPTIONAL :: clwmodis(npoints)
+                  !  MODIS liquid cloud fraction: fraction of sunlit
+                  !  subcolumns classified liquid-dominated
+      REAL(wp), OPTIONAL :: climodis(npoints)
+                  !  MODIS ice cloud fraction: fraction of sunlit
+                  !  subcolumns classified ice-dominated
+! BMD 07/26 - end
+
+
 !
 !     ------
 !     Working variables added when program updated to mimic Mark Webb's PV-Wave code
@@ -246,6 +343,28 @@
       REAL(wp) :: isccp_taumin,fluxtopinit(npoints),tauir(npoints)
       REAL(wp) :: albedocld(npoints,ncol)
       REAL(wp) :: boxarea
+
+! BMD 07/26 - start
+      REAL(wp) :: tau_liq(npoints,ncol), tau_ice(npoints,ncol)
+                  !  per-subcolumn liquid/ice-only optical depth,
+                  !  accumulated the same way as tau(j,ibox) above but
+                  !  split by phase
+      REAL(wp) :: retau_liq(npoints,ncol), retau_ice(npoints,ncol)
+                  !  per-subcolumn optical-depth-weighted sum of
+                  !  reffl/reffi over the cloudy levels in that
+                  !  subcolumn; divided by tau_liq/tau_ice below to get
+                  !  a single characteristic subcolumn effective radius
+      REAL(wp) :: box_reffl(npoints), box_reffi(npoints)
+      REAL(wp) :: box_lwp(npoints), box_iwp(npoints)
+      REAL(wp) :: liquid_fraction(npoints)
+                  !  tau_liq/(tau_liq+tau_ice) for the current subcolumn --
+                  !  the single per-subcolumn phase-dominance fraction used
+                  !  to decide liquid- vs. ice-dominated (see
+                  !  modis_phase_threshold above)
+      INTEGER  :: imodis_lwp(npoints), imodis_reffl(npoints)
+      INTEGER  :: imodis_iwp(npoints), imodis_reffi(npoints)
+! BMD 07/26 - end
+
       INTEGER :: debug       ! set to non-zero value to print out inputs
                     ! with step debug
       INTEGER :: debugcol    ! set to non-zero value to print out column
@@ -426,6 +545,12 @@
           boxtau(j,ibox)=output_missing_value
           boxptop(j,ibox)=output_missing_value
           box_cloudy(j,ibox)=.false.
+! BMD 07/26 - start
+          tau_liq(j,ibox)=0._wp
+          tau_ice(j,ibox)=0._wp
+          retau_liq(j,ibox)=0._wp
+          retau_ice(j,ibox)=0._wp
+! BMD 07/26 - end
         ENDDO
 15    CONTINUE
 
@@ -441,6 +566,36 @@
               ENDDO
             ENDDO ! ibox
       ENDDO ! ilev
+
+! BMD 07/26 - start
+      !compute per-subcolumn liquid/ice optical depth and the
+      !optical-depth-weighted sum of reffl/reffi, needed below to build a
+      !single characteristic liquid/ice effective radius per subcolumn for
+      !the MODIS-style LWP/IWP-vs-Reff joint histograms.
+      !Gated: dtau_s_liq/dtau_s_ice/reffl/reffi are OPTIONAL, and it is
+      !illegal to reference an absent optional dummy argument -- callers
+      !that don't pass this group (e.g. mo_cosp_isccp_simulator.f90) must
+      !skip this block entirely; tau_liq/tau_ice/retau_liq/retau_ice stay
+      !at the 0._wp they were reset to above, which is fine since they're
+      !only consumed by the (equally gated) MODIS histogram block below.
+      IF (PRESENT(dtau_s_liq)) THEN
+      DO ilev=1,nlev
+            DO ibox=1,ncol
+              DO j=1,npoints
+                 IF (frac_out(j,ibox,ilev).eq.1._wp) THEN
+                        tau_liq(j,ibox)=tau_liq(j,ibox) + dtau_s_liq(j,ilev)
+                        tau_ice(j,ibox)=tau_ice(j,ibox) + dtau_s_ice(j,ilev)
+                        retau_liq(j,ibox)=retau_liq(j,ibox) &
+     &                     + dtau_s_liq(j,ilev)*reffl(j,ilev)
+                        retau_ice(j,ibox)=retau_ice(j,ibox) &
+     &                     + dtau_s_ice(j,ilev)*reffi(j,ilev)
+                 ENDIF
+              ENDDO
+            ENDDO ! ibox
+      ENDDO ! ilev
+      ENDIF
+! BMD 07/26 - end
+
           IF (ncolprint.ne.0) THEN
 
               DO j=1,npoints ,1000
@@ -942,6 +1097,55 @@
 38    CONTINUE
 37    CONTINUE
 
+! BMD 07/26 - start
+      !reset MODIS-style LWP-vs-ReffLiq and IWP-vs-ReffIce joint-histogram
+      !frequencies. Unlike the ISCCP tau/CTP histogram, these bins rely on
+      !solar reflectance retrievals only, so they are gated on sunlit alone
+      !(no top_height==3 IR-only override, which is ISCCP-specific).
+      !Gated on PRESENT: fq_modis_lwp_reffl etc. are OPTIONAL, omitted by
+      !callers that don't want MODIS output (e.g. the ISCCP-only call site
+      !in mo_cosp_isccp_simulator.f90) -- referencing them unconditionally
+      !would dereference an absent argument.
+      IF (PRESENT(fq_modis_lwp_reffl)) THEN
+      DO ilev=1,n_modis_lwp
+      DO ilev2=1,n_modis_reffl
+        DO j=1,npoints
+             IF (sunlit(j).eq.1) THEN
+                fq_modis_lwp_reffl(j,ilev,ilev2)= 0._wp
+             ELSE
+                fq_modis_lwp_reffl(j,ilev,ilev2)= output_missing_value
+             ENDIF
+        ENDDO
+      ENDDO
+      ENDDO
+
+      DO ilev=1,n_modis_iwp
+      DO ilev2=1,n_modis_reffi
+        DO j=1,npoints
+             IF (sunlit(j).eq.1) THEN
+                fq_modis_iwp_reffi(j,ilev,ilev2)= 0._wp
+             ELSE
+                fq_modis_iwp_reffi(j,ilev,ilev2)= output_missing_value
+             ENDIF
+        ENDDO
+      ENDDO
+      ENDDO
+
+      !reset MODIS total/liquid/ice cloud fraction
+      DO j=1,npoints
+           IF (sunlit(j).eq.1) THEN
+              cltmodis(j)= 0._wp
+              clwmodis(j)= 0._wp
+              climodis(j)= 0._wp
+           ELSE
+              cltmodis(j)= output_missing_value
+              clwmodis(j)= output_missing_value
+              climodis(j)= output_missing_value
+           ENDIF
+      ENDDO
+      ENDIF
+! BMD 07/26 - end
+
       !reset variables need for averaging cloud properties
       DO j=1,npoints 
         IF (sunlit(j).eq.1 .or. top_height .eq. 3) THEN 
@@ -1059,6 +1263,175 @@
               ENDIF
             ENDIF
           ENDIF
+
+! BMD 07/26 - start
+          !MODIS-style LWP-vs-ReffLiq and IWP-vs-ReffIce joint histograms.
+          !Matches ICON modis_simulator.F90's modis_column logic: each
+          !subcolumn is assigned a SINGLE dominant phase (liquid, ice, or
+          !undetermined -- see modis_phase_threshold above, standing in for
+          !that file's phaseDiscrimination_Threshold/phaseIsUndetermined),
+          !then the whole subcolumn's TOTAL optical depth tau(j,ibox) (not
+          !just its liquid- or ice-only component) is combined with that
+          !phase's characteristic effective radius via the Stephens (1978)
+          !bulk approximation CWP = (2/3)*rho*re*tau -- the same relation
+          !modis_simulator.F90's lwpWRK/iwpWRK apply to the full retrievedTau.
+          !A subcolumn contributes to at most one of the two histograms,
+          !never both -- unlike the unconditional tau/CTP machinery above.
+          !Gate is modis_min_optical_thickness (0.3), not the near-zero
+          !tauchk the ISCCP machinery above uses -- matches real MODIS's
+          !actual detection limit (see modis_min_optical_thickness above).
+          !Outer PRESENT check: fq_modis_lwp_reffl/cltmodis/etc. are
+          !OPTIONAL, omitted by callers that don't want MODIS output (e.g.
+          !mo_cosp_isccp_simulator.f90) -- referencing them unconditionally
+          !would dereference an absent argument.
+          IF (PRESENT(fq_modis_lwp_reffl)) THEN
+          IF (sunlit(j).eq.1 .and. &
+     &        tau(j,ibox) .ge. modis_min_optical_thickness) THEN
+
+            !cltmodis counts every MODIS-detected subcolumn regardless of
+            !phase outcome (including "undetermined"), matching real COSP's
+            !cloudMask = phase/=phaseIsNone -- so cltmodis is NOT simply
+            !clwmodis+climodis
+            cltmodis(j) = cltmodis(j) + boxarea
+
+            IF ( (tau_liq(j,ibox)+tau_ice(j,ibox)) .gt. (tauchk) ) THEN
+              liquid_fraction(j) = tau_liq(j,ibox) &
+     &          / (tau_liq(j,ibox)+tau_ice(j,ibox))
+            ELSE
+              liquid_fraction(j) = -1._wp
+            ENDIF
+
+            IF (liquid_fraction(j) .ge. modis_phase_threshold) THEN
+              clwmodis(j) = clwmodis(j) + boxarea
+              !liquid-dominated subcolumn -> LWP-vs-ReffLiq
+              box_reffl(j) = retau_liq(j,ibox) / tau_liq(j,ibox)
+              box_lwp(j) = modis_lwp_conversion * box_reffl(j) * tau(j,ibox)
+
+              imodis_lwp(j) = 0
+              imodis_reffl(j) = 0
+
+              IF (box_lwp(j) .ge. modis_lwp_bin_edges(1) .and. &
+     &          box_lwp(j) .lt. modis_lwp_bin_edges(2)) THEN
+                imodis_lwp(j)=1
+              ELSE IF (box_lwp(j) .ge. modis_lwp_bin_edges(2) .and. &
+     &          box_lwp(j) .lt. modis_lwp_bin_edges(3)) THEN
+                imodis_lwp(j)=2
+              ELSE IF (box_lwp(j) .ge. modis_lwp_bin_edges(3) .and. &
+     &          box_lwp(j) .lt. modis_lwp_bin_edges(4)) THEN
+                imodis_lwp(j)=3
+              ELSE IF (box_lwp(j) .ge. modis_lwp_bin_edges(4) .and. &
+     &          box_lwp(j) .lt. modis_lwp_bin_edges(5)) THEN
+                imodis_lwp(j)=4
+              ELSE IF (box_lwp(j) .ge. modis_lwp_bin_edges(5) .and. &
+     &          box_lwp(j) .lt. modis_lwp_bin_edges(6)) THEN
+                imodis_lwp(j)=5
+              ELSE IF (box_lwp(j) .ge. modis_lwp_bin_edges(6) .and. &
+     &          box_lwp(j) .lt. modis_lwp_bin_edges(7)) THEN
+                imodis_lwp(j)=6
+              ELSE IF (box_lwp(j) .ge. modis_lwp_bin_edges(7)) THEN
+                imodis_lwp(j)=7
+              ENDIF
+
+              IF (box_reffl(j) .ge. modis_reffl_bin_edges(1) .and. &
+     &          box_reffl(j) .lt. modis_reffl_bin_edges(2)) THEN
+                imodis_reffl(j)=1
+              ELSE IF (box_reffl(j) .ge. modis_reffl_bin_edges(2) .and. &
+     &          box_reffl(j) .lt. modis_reffl_bin_edges(3)) THEN
+                imodis_reffl(j)=2
+              ELSE IF (box_reffl(j) .ge. modis_reffl_bin_edges(3) .and. &
+     &          box_reffl(j) .lt. modis_reffl_bin_edges(4)) THEN
+                imodis_reffl(j)=3
+              ELSE IF (box_reffl(j) .ge. modis_reffl_bin_edges(4) .and. &
+     &          box_reffl(j) .lt. modis_reffl_bin_edges(5)) THEN
+                imodis_reffl(j)=4
+              ELSE IF (box_reffl(j) .ge. modis_reffl_bin_edges(5) .and. &
+     &          box_reffl(j) .lt. modis_reffl_bin_edges(6)) THEN
+                imodis_reffl(j)=5
+              ELSE IF (box_reffl(j) .ge. modis_reffl_bin_edges(6) .and. &
+     &          box_reffl(j) .lt. modis_reffl_bin_edges(7)) THEN
+                imodis_reffl(j)=6
+              ELSE IF (box_reffl(j) .ge. modis_reffl_bin_edges(7) .and. &
+     &          box_reffl(j) .lt. modis_reffl_bin_edges(8)) THEN
+                imodis_reffl(j)=7
+              ELSE IF (box_reffl(j) .ge. modis_reffl_bin_edges(8)) THEN
+                imodis_reffl(j)=8
+              ENDIF
+
+              IF (imodis_lwp(j) .gt. 0 .and. imodis_reffl(j) .gt. 0) THEN
+                fq_modis_lwp_reffl(j,imodis_lwp(j),imodis_reffl(j)) = &
+     &            fq_modis_lwp_reffl(j,imodis_lwp(j),imodis_reffl(j)) + boxarea
+              ENDIF
+
+            ELSE IF (liquid_fraction(j) .ge. 0._wp .and. &
+     &        liquid_fraction(j) .le. (1._wp-modis_phase_threshold)) THEN
+              !ice-dominated subcolumn -> IWP-vs-ReffIce
+              climodis(j) = climodis(j) + boxarea
+              box_reffi(j) = retau_ice(j,ibox) / tau_ice(j,ibox)
+              box_iwp(j) = modis_lwp_conversion * modis_ice_density &
+     &          * box_reffi(j) * tau(j,ibox)
+
+              imodis_iwp(j) = 0
+              imodis_reffi(j) = 0
+
+              IF (box_iwp(j) .ge. modis_iwp_bin_edges(1) .and. &
+     &          box_iwp(j) .lt. modis_iwp_bin_edges(2)) THEN
+                imodis_iwp(j)=1
+              ELSE IF (box_iwp(j) .ge. modis_iwp_bin_edges(2) .and. &
+     &          box_iwp(j) .lt. modis_iwp_bin_edges(3)) THEN
+                imodis_iwp(j)=2
+              ELSE IF (box_iwp(j) .ge. modis_iwp_bin_edges(3) .and. &
+     &          box_iwp(j) .lt. modis_iwp_bin_edges(4)) THEN
+                imodis_iwp(j)=3
+              ELSE IF (box_iwp(j) .ge. modis_iwp_bin_edges(4) .and. &
+     &          box_iwp(j) .lt. modis_iwp_bin_edges(5)) THEN
+                imodis_iwp(j)=4
+              ELSE IF (box_iwp(j) .ge. modis_iwp_bin_edges(5) .and. &
+     &          box_iwp(j) .lt. modis_iwp_bin_edges(6)) THEN
+                imodis_iwp(j)=5
+              ELSE IF (box_iwp(j) .ge. modis_iwp_bin_edges(6) .and. &
+     &          box_iwp(j) .lt. modis_iwp_bin_edges(7)) THEN
+                imodis_iwp(j)=6
+              ELSE IF (box_iwp(j) .ge. modis_iwp_bin_edges(7)) THEN
+                imodis_iwp(j)=7
+              ENDIF
+
+              IF (box_reffi(j) .ge. modis_reffi_bin_edges(1) .and. &
+     &          box_reffi(j) .lt. modis_reffi_bin_edges(2)) THEN
+                imodis_reffi(j)=1
+              ELSE IF (box_reffi(j) .ge. modis_reffi_bin_edges(2) .and. &
+     &          box_reffi(j) .lt. modis_reffi_bin_edges(3)) THEN
+                imodis_reffi(j)=2
+              ELSE IF (box_reffi(j) .ge. modis_reffi_bin_edges(3) .and. &
+     &          box_reffi(j) .lt. modis_reffi_bin_edges(4)) THEN
+                imodis_reffi(j)=3
+              ELSE IF (box_reffi(j) .ge. modis_reffi_bin_edges(4) .and. &
+     &          box_reffi(j) .lt. modis_reffi_bin_edges(5)) THEN
+                imodis_reffi(j)=4
+              ELSE IF (box_reffi(j) .ge. modis_reffi_bin_edges(5) .and. &
+     &          box_reffi(j) .lt. modis_reffi_bin_edges(6)) THEN
+                imodis_reffi(j)=5
+              ELSE IF (box_reffi(j) .ge. modis_reffi_bin_edges(6) .and. &
+     &          box_reffi(j) .lt. modis_reffi_bin_edges(7)) THEN
+                imodis_reffi(j)=6
+              ELSE IF (box_reffi(j) .ge. modis_reffi_bin_edges(7) .and. &
+     &          box_reffi(j) .lt. modis_reffi_bin_edges(8)) THEN
+                imodis_reffi(j)=7
+              ELSE IF (box_reffi(j) .ge. modis_reffi_bin_edges(8)) THEN
+                imodis_reffi(j)=8
+              ENDIF
+
+              IF (imodis_iwp(j) .gt. 0 .and. imodis_reffi(j) .gt. 0) THEN
+                fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) = &
+     &            fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) + boxarea
+              ENDIF
+            ENDIF
+            !ELSE: mixed-phase/undetermined subcolumn, or no phase-resolved
+            !tau at all -- excluded from both histograms, matching ICON's
+            !phaseIsUndetermined/phaseIsNone handling.
+
+          ENDIF
+          ENDIF
+! BMD 07/26 - end
         ENDDO ! j
 39    CONTINUE
       

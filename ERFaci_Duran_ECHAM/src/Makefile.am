@@ -54,6 +54,7 @@ echam6_SOURCES = auxhyb.f90 baresoildiff.f90 clsst.f90 clveg.f90 collect.f90 \
 	mo_conv.f90 mo_cosp_constants.f90 mo_cosp_isccp_simulator.f90 \
 	mo_cosp_lidar.f90 mo_cosp_llnl_stats.f90 mo_cosp_lmd_ipsl_stats.f90 \
 	mo_cosp_metoff_cosp.f90 mo_cosp_metoff_cosp_simulator.f90 \
+	mo_cosp_modis_simulator.f90 \
 	mo_cosp_offline.f90 mo_cosp_simulator.f90 mo_cosp_stats.f90 \
 	mo_couple.f90 mo_couple_wrap.f90 mo_cover.f90 mo_cuadjust.f90 \
 	mo_cuascent.f90 mo_cudescent.f90 mo_cufluxdts.f90 mo_cuinitialize.f90 \
@@ -368,7 +369,8 @@ mo_cosp_lmd_ipsl_stats.o: mo_cosp_llnl_stats.o mo_kind.o mo_memory_g3b.o
 mo_cosp_metoff_cosp.o: mo_cosp_constants.o mo_cosp_metoff_cosp_simulator.o \
 	mo_kind.o mo_random_numbers.o
 mo_cosp_metoff_cosp_simulator.o: mo_cosp_isccp_simulator.o mo_cosp_lidar.o \
-	mo_cosp_stats.o mo_kind.o
+	mo_cosp_modis_simulator.o mo_cosp_stats.o mo_kind.o
+mo_cosp_modis_simulator.o: mo_cosp_constants.o mo_kind.o
 mo_cosp_offline.o: mo_control.o mo_cosp_simulator.o mo_decomposition.o \
 	mo_exception.o mo_filename.o mo_geoloc.o mo_kind.o mo_linked_list.o \
 	mo_memory_base.o mo_memory_g1a.o mo_memory_g3b.o mo_memory_gl.o \

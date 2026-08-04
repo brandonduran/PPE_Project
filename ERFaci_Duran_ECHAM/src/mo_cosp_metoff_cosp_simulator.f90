@@ -11,6 +11,9 @@ MODULE mo_cosp_metoff_cosp_simulator
   USE mo_cosp_lidar
   USE mo_cosp_stats
   USE mo_cosp_isccp_simulator
+! BMD 07/26 - start
+  USE mo_cosp_modis_simulator
+! BMD 07/26 - end
   USE mo_kind, only:wp
 
   IMPLICIT NONE
@@ -23,6 +26,9 @@ CONTAINS
  SUBROUTINE cosp_simulator(                         &
        kbdim,Ncolumns,klev,                         &
        Lisccp_sim,  Llidar_sim,  Llidar_cfad, Lstats,            &
+! BMD 07/26 - start
+       Lmodis_sim,                                  &
+! BMD 07/26 - end
 !gbx
        lidar_ice_type,                               &
        isccp_top_height, isccp_top_height_direction, &
@@ -42,7 +48,14 @@ CONTAINS
        fq_isccp,  totalcldarea,                     &
        meanptop,  meantaucld,                       &
        meantb, meantbclr, boxtau,  boxptop,         &
-       meanalbedocld                               )
+       meanalbedocld,                                &
+! BMD 07/26 - start
+!modis
+       dtau_s_liq, dtau_s_ice,                      &
+       fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
+       cltmodis, clwmodis, climodis                 &
+! BMD 07/26 - end
+                                                     )
 
   ! Arguments
   INTEGER, INTENT(IN) :: kbdim,Ncolumns,klev
@@ -50,6 +63,9 @@ CONTAINS
   LOGICAL, INTENT(IN) ::  Llidar_sim
   LOGICAL, INTENT(IN) ::  Llidar_cfad
   LOGICAL, INTENT(IN) ::  Lstats
+! BMD 07/26 - start
+  LOGICAL, INTENT(IN) ::  Lmodis_sim
+! BMD 07/26 - end
 
 
 !gbx
@@ -70,6 +86,15 @@ CONTAINS
   REAL(wp), INTENT(INOUT) :: sh(kbdim,klev)
   REAL(wp), INTENT(INOUT) :: dem_s(kbdim,klev)
   REAL(wp), INTENT(INOUT) :: dtau_s(kbdim,klev)
+! BMD 07/26 - start
+!  liquid/ice-split counterpart of dtau_s, needed by cosp_modis_simulator's
+!  LWP/IWP-vs-Reff histograms. Not yet sourced from anywhere upstream of this
+!  subroutine's caller (mo_cosp_metoff_cosp.f90's COSP) -- see cosp_icarus.f90
+!  BMD 07/26 notes for the nearest existing candidate quantities
+!  (cld_tau_swl_vr/cld_tau_swi_vr in mo_psrad_interface.f90).
+  REAL(wp), INTENT(INOUT) :: dtau_s_liq(kbdim,klev)
+  REAL(wp), INTENT(INOUT) :: dtau_s_ice(kbdim,klev)
+! BMD 07/26 - end
   REAL(wp), INTENT(INOUT) :: sunlit(kbdim)
   REAL(wp), INTENT(INOUT) :: skt(kbdim)
   REAL(wp), INTENT(INOUT) :: zlev(kbdim,klev)
@@ -95,6 +120,18 @@ CONTAINS
   REAL(wp) :: meantb(kbdim), meantbclr(kbdim)
   REAL(wp) :: boxtau(kbdim,Ncolumns), boxptop(kbdim,Ncolumns)
   REAL(wp) :: meanalbedocld(kbdim)
+
+! BMD 07/26 - start
+! modis
+!  bin counts (7,8 / 7,8) must match n_modis_lwp/n_modis_reffl/etc. declared
+!  in cosp_icarus.f90 -- see the note in mo_cosp_modis_simulator.f90
+  REAL(wp) :: fq_modis_lwp_reffl(kbdim,7,8)
+  REAL(wp) :: fq_modis_iwp_reffi(kbdim,7,8)
+!  total/liquid/ice cloud fraction (fraction of sunlit subcolumns)
+  REAL(wp) :: cltmodis(kbdim)
+  REAL(wp) :: clwmodis(kbdim)
+  REAL(wp) :: climodis(kbdim)
+! BMD 07/26 - end
 
 ! subgrid sgx
   REAL(wp) :: frac_out(kbdim,Ncolumns,klev)
@@ -130,6 +167,38 @@ CONTAINS
       meantb, meantbclr, boxtau,  boxptop,         &
       meanalbedocld )
   ENDIF
+
+! BMD 07/26 - start
+  !+++++++++ MODIS simulator ++++++++++
+  ! cosp_modis_simulator only returns the two MODIS-specific joint histograms
+  ! (fq_modis_lwp_reffl/fq_modis_iwp_reffi). It still runs the full icarus
+  ! engine internally (tau/CTP is computed as part of the same subcolumn pass
+  ! that produces the MODIS histograms), but the ISCCP-shaped outputs from
+  ! that internal call are local/discarded there, not threaded back through
+  ! to this subroutine's real fq_isccp/totalcldarea/etc. -- so the ISCCP
+  ! tau/CTP histogram itself is only ever produced once, by
+  ! cosp_isccp_simulator above, regardless of whether Lisccp_sim and
+  ! Lmodis_sim are both on.
+  !
+  ! reffl/reffi are sliced directly from the Reff(:,:,N_hydro) array already
+  ! threaded to this subroutine for the lidar path (I_LSCLIQ/I_LSCICE from
+  ! mo_cosp_constants) -- no new dummy argument needed for those.
+  IF (Lmodis_sim) THEN
+    CALL cosp_modis_simulator(                     &
+      kbdim,  klev, Ncolumns,                      &
+!gbx
+      isccp_top_height, isccp_top_height_direction,&
+      isccp_overlap, sh, tca, dtau_s, T, dem_s,    &
+      p, ph , sunlit, skt, isccp_emsfc_lw,         &
+!sgx
+      frac_out,                                    &
+!modis
+      dtau_s_liq, dtau_s_ice,                      &
+      Reff(:,:,I_LSCLIQ), Reff(:,:,I_LSCICE),      &
+      fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
+      cltmodis, clwmodis, climodis )
+  ENDIF
+! BMD 07/26 - end
 
   !+++++++++++ Summary statistics +++++++++++
   IF (Lstats) THEN
