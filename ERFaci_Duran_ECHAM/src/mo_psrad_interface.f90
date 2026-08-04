@@ -25,6 +25,7 @@ module mo_psrad_interface
        ONLY: radiation_subm_1, radiation_subm_2  
   USE mo_cosp_simulator,  ONLY: cosp_reffl, cosp_reffi,      &
                                 locosp, cosp_f3d, Lisccp_sim,&
+                                Lmodis_sim,                  &
                                 cisccp_cldtau3d, cisccp_cldemi3d, &
                                 cisccp_cldtau3d_liq, cisccp_cldtau3d_ice
   USE mo_spec_sampling,   ONLY: spec_sampling_strategy, get_num_gpoints
@@ -427,7 +428,18 @@ CONTAINS
           cosp_f3d(jl,jk,krow)   = cld_frc(jl,jk) ! Or cld_frc_vr?
         END DO
       END DO
-      IF ( Lisccp_sim ) THEN   
+! BMD 07/26 - start
+!  Widened from Lisccp_sim alone: cisccp_cldtau3d/cisccp_cldemi3d/
+!  cisccp_cldtau3d_liq/_ice are the shared upstream data source for
+!  cosp_modis_simulator's dtau_s/dem_s/dtau_s_liq/dtau_s_ice (see
+!  mo_cosp_simulator.f90's call_cospsimulator), not ISCCP-exclusive --
+!  without this, Lmodis_sim=.true. with Lisccp_sim=.false. would leave
+!  MODIS running against all-zero input. The ISCCP-exclusive stream
+!  fields/output (cltisccp, cldtype01..49, etc.) stay gated on Lisccp_sim
+!  alone elsewhere (mo_cosp_simulator.f90's construct_stream_cosp/
+!  call_cospsimulator), unaffected by this widening.
+      IF ( Lisccp_sim .OR. Lmodis_sim ) THEN
+! BMD 07/26 - end
         !don't really need vert. re-arrange ...
         DO jk=1,klev
           jkb = klev+1-jk

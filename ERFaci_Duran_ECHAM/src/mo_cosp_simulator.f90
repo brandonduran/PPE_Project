@@ -178,14 +178,15 @@ CONTAINS
     Lisccp_sim = .true.
 ! BMD 07/26 - start
     Lmodis_sim = .false.
-                          ! off by default: still needs end-to-end validation
-                          ! (see the BMD 07/26 notes in cosp_icarus.f90 and
-                          ! mo_cosp_modis_simulator.f90). Also note this
-                          ! subroutine only populates dtau_s/dem_s/skt/sh
-                          ! (and now dtau_s_liq/dtau_s_ice) under
-                          ! IF (Lisccp_sim) below, so Lmodis_sim currently
-                          ! needs Lisccp_sim = .true. too, or MODIS output
-                          ! will be all-zero regardless of this switch.
+                          ! off by default: still needs end-to-end
+                          ! run/output validation (see the BMD 07/26 notes
+                          ! in cosp_icarus.f90 and mo_cosp_modis_simulator.f90).
+                          ! Independent of Lisccp_sim -- shared upstream
+                          ! inputs (skt/sh/dtau_s/dem_s/dtau_s_liq/
+                          ! dtau_s_ice and their cisccp_cldtau3d-family
+                          ! sources) are gated on Lisccp_sim .OR. Lmodis_sim
+                          ! wherever they're populated/allocated, so this
+                          ! switch no longer needs Lisccp_sim = .true. too.
 ! BMD 07/26 - end
     Llidar_cfad = .false.
     l_fixed_reff = .false.
@@ -382,20 +383,6 @@ END SUBROUTINE cosp_initialize
                            longname='ISCCP mean cloud albedo', units='1')
       CALL add_stream_element (scosp, 'tauisccp', cosp_isccp_meantaucld,  &
                            longname='ISCCP mean cloud tau', units='1')
-      CALL add_stream_element (scosp, 'cisccp_tau3d', cisccp_cldtau3d, &
-                           leveltype = HYBRID, lpost=extra_output,  &
-                           longname='COSP-ISCCP cloud optical thickness')
-      CALL add_stream_element (scosp, 'cisccp_emi3d', cisccp_cldemi3d, &
-                           leveltype = HYBRID, lpost=extra_output, &
-                           longname='COSP-ISCCP cloud optical thickness')
-! BMD 07/26 - start
-      CALL add_stream_element (scosp, 'cisccp_tau3d_liq', cisccp_cldtau3d_liq, &
-                           leveltype = HYBRID, lpost=extra_output,  &
-                           longname='COSP-ISCCP cloud optical thickness, liquid-only')
-      CALL add_stream_element (scosp, 'cisccp_tau3d_ice', cisccp_cldtau3d_ice, &
-                           leveltype = HYBRID, lpost=extra_output,  &
-                           longname='COSP-ISCCP cloud optical thickness, ice-only')
-! BMD 07/26 - end
 
       ALLOCATE(isccp_cldtypes(49))
       DO i=1,49
@@ -405,6 +392,33 @@ END SUBROUTINE cosp_initialize
       ENDDO
 
    END IF!Lisccp_sim
+
+! BMD 07/26 - start
+!  cisccp_tau3d/emi3d/_liq/_ice are shared upstream plumbing (see the
+!  mo_psrad_interface.f90 BMD 07/26 note), read by cosp_modis_simulator's
+!  dtau_s/dem_s/dtau_s_liq/dtau_s_ice sourcing (call_cospsimulator below)
+!  as well as ISCCP's own dtau_s/dem_s -- hoisted out of the strict
+!  Lisccp_sim block above so Lmodis_sim=.true., Lisccp_sim=.false. still
+!  allocates them (POINTERs, not ALLOCATABLE -- unassociated otherwise,
+!  which mo_psrad_interface.f90 would then write through and crash).
+!  lpost=extra_output already controls whether these are actually written
+!  to output, independent of either switch, so widening the allocation
+!  gate here has no effect on what appears in a MODIS-only user's output.
+   IF (Lisccp_sim .OR. Lmodis_sim) THEN
+      CALL add_stream_element (scosp, 'cisccp_tau3d', cisccp_cldtau3d, &
+                           leveltype = HYBRID, lpost=extra_output,  &
+                           longname='COSP-ISCCP cloud optical thickness')
+      CALL add_stream_element (scosp, 'cisccp_emi3d', cisccp_cldemi3d, &
+                           leveltype = HYBRID, lpost=extra_output, &
+                           longname='COSP-ISCCP cloud optical thickness')
+      CALL add_stream_element (scosp, 'cisccp_tau3d_liq', cisccp_cldtau3d_liq, &
+                           leveltype = HYBRID, lpost=extra_output,  &
+                           longname='COSP-ISCCP cloud optical thickness, liquid-only')
+      CALL add_stream_element (scosp, 'cisccp_tau3d_ice', cisccp_cldtau3d_ice, &
+                           leveltype = HYBRID, lpost=extra_output,  &
+                           longname='COSP-ISCCP cloud optical thickness, ice-only')
+   END IF!Lisccp_sim .OR. Lmodis_sim
+! BMD 07/26 - end
 
 ! BMD 07/26 - start
    IF (Lmodis_sim) THEN
@@ -730,8 +744,14 @@ END SUBROUTINE cosp_initialize
     
     sunlit(1:kproma)   = cosp_sunlit(1:kproma,jrow)  
 
-    ! ISCCP simulator
-    IF (Lisccp_sim) THEN
+    ! ISCCP simulator inputs, also needed by cosp_modis_simulator (BMD
+    ! 07/26): it runs the full icarus engine internally, so skt/sh/dtau_s/
+    ! dem_s/dtau_s_liq/dtau_s_ice are shared inputs, not ISCCP-exclusive --
+    ! widened from Lisccp_sim alone so Lmodis_sim=.true., Lisccp_sim=.false.
+    ! doesn't leave MODIS running against all-zero input (see the
+    ! mo_psrad_interface.f90 and construct_stream_cosp BMD 07/26 notes for
+    ! the other two gates that needed the same widening).
+    IF (Lisccp_sim .OR. Lmodis_sim) THEN
        skt(1:kproma) = zfrl(1:kproma)*tslm1(1:kproma)              &
              +zfri(1:kproma)*tsi(1:kproma)                &
              +zfrw(1:kproma)*tsw(1:kproma)
