@@ -26,7 +26,8 @@
 ! BMD 07/26 - start
      &     dtau_s_liq, dtau_s_ice, reffl, reffi, &
      &     fq_modis_lwp_reffl, fq_modis_iwp_reffi, &
-     &     cltmodis, clwmodis, climodis &
+     &     cltmodis, clwmodis, climodis, &
+     &     fq_modis_tau_ctp, fq_modis_tau_ctp_liq, fq_modis_tau_ctp_ice &
 ! BMD 07/26 - end
      &)
 
@@ -133,6 +134,28 @@
 !     ISCCP tau/CTP histogram above. A subcolumn with tau(j,ibox) below this
 !     is not MODIS-visible at all, regardless of phase.
       REAL(wp), PARAMETER :: modis_min_optical_thickness = 0.3_wp
+
+!     MODIS tau/cloud-top-pressure joint histogram: bin counts and edges
+!     are NOT redeclared here -- COSPv2's numMODISTauBins/modis_histTau and
+!     numMODISPresBins/modis_histPres (cosp_config.F90, ~/COSPv2.0) are
+!     IDENTICAL to this file's own ISCCP tau/CTP bin edges (isccp_taumin/
+!     itau(j) and the 180/310/440/560/680/800 mb breakpoints/ipres(j)
+!     below), confirmed against ~/COSPv2.0/src/cosp.F90 (numMODISTauBins=
+!     ntau, modis_histTau=tau_binBounds) -- so itau(j) is reused directly
+!     as the MODIS tau bin index (see the fq_modis_tau_ctp block below);
+!     only the pressure axis needs its own binning (imodis_pres), since
+!     MODIS's own CTP retrieval differs from ISCCP's ptop (see below).
+      INTEGER, PARAMETER :: n_modis_tau = 7, n_modis_pres = 7
+
+!     CO2-slicing cloud-top-pressure retrieval parameters, matching real
+!     COSP's CO2Slicing_TauLimit and CO2Slicing_PressureLimit
+!     (cosp_modis_interface.F90's COSP_MODIS_INIT in ~/COSPv2.0).
+!     CO2Slicing_PressureLimit is 70000 Pa upstream; kept here in mb (700)
+!     to match this file's existing ptop/boxptop mb convention, so the
+!     CO2-sliced retrieval and the ISCCP-fallback CTP can be compared and
+!     binned without a unit conversion at every use site.
+      REAL(wp), PARAMETER :: modis_co2slicing_taulimit = 1._wp
+      REAL(wp), PARAMETER :: modis_co2slicing_preslimit_mb = 700._wp
 ! BMD 07/26 - end
 
 !     -----
@@ -303,6 +326,20 @@
       REAL(wp), OPTIONAL :: climodis(npoints)
                   !  MODIS ice cloud fraction: fraction of sunlit
                   !  subcolumns classified ice-dominated
+
+!     OPTIONAL, own group: fq_modis_tau_ctp/_liq/_ice don't require
+!     dtau_s_liq/dtau_s_ice/reffl/reffi at all (only dtau_s/frac_out/phalf,
+!     all non-optional), but are gated the same OPTIONAL/PRESENT way as the
+!     rest of the MODIS block since mo_cosp_modis_simulator.f90 -- the only
+!     caller wanting MODIS output -- always supplies the whole group
+!     together.
+      REAL(wp), OPTIONAL :: fq_modis_tau_ctp(npoints,n_modis_tau,n_modis_pres)
+                  !  joint histogram of optical thickness vs. cloud-top
+                  !  pressure (all phases), fraction of model grid box
+      REAL(wp), OPTIONAL :: fq_modis_tau_ctp_liq(npoints,n_modis_tau,n_modis_pres)
+                  !  same, restricted to liquid-dominated subcolumns
+      REAL(wp), OPTIONAL :: fq_modis_tau_ctp_ice(npoints,n_modis_tau,n_modis_pres)
+                  !  same, restricted to ice-dominated subcolumns
 ! BMD 07/26 - end
 
 
@@ -395,6 +432,37 @@
                   !  fraction, and (on the level where the cumulative tau
                   !  crosses modis_phase_taulimit) the partial increment
                   !  actually used, mirroring weight_by_extinction's deltaX
+
+      REAL(wp) :: ctp_tau_cum(npoints,ncol), ctp_pres_cum(npoints,ncol)
+                  !  running (cloud-top-down) cumulative total optical depth
+                  !  and optical-depth-weighted pressure product, ports
+                  !  COSPv2's cloud_top_pressure (modis_simulator.F90)
+                  !  restricted to the top modis_co2slicing_taulimit of
+                  !  cloud optical depth -- the CO2-slicing MODIS
+                  !  cloud-top-pressure retrieval, distinct from ISCCP's
+                  !  brightness-temperature-based ptop(j,ibox)
+      LOGICAL  :: ctp_active(npoints,ncol)
+                  !  .true. until a subcolumn's cumulative tau reaches
+                  !  modis_co2slicing_taulimit; freezes ctp_tau_cum/
+                  !  ctp_pres_cum thereafter, same role as phase_active above
+      REAL(wp) :: ctp_deltatau
+                  !  per-(j,ibox,ilev) scratch scalar: on the level where
+                  !  the cumulative tau crosses modis_co2slicing_taulimit,
+                  !  the partial tau increment actually used (mirrors
+                  !  phase_deltatau/weight_by_extinction's deltaX, but for
+                  !  cloud_top_pressure's trapezoidal-rule pressure integral)
+      REAL(wp) :: modis_ctp_j
+                  !  current subcolumn's blended MODIS cloud-top pressure
+                  !  (mb): the CO2-sliced ctp_pres_cum/ctp_tau_cum result,
+                  !  or ptop(j,ibox) (ISCCP's CTP) when the CO2-sliced value
+                  !  falls below modis_co2slicing_preslimit_mb (low cloud) --
+                  !  ports COSPv2's modis_subcolumn low-cloud fallback
+      INTEGER  :: imodis_pres(npoints)
+                  !  MODIS CTP bin index for the current subcolumn, binned
+                  !  from modis_ctp_j using the same 180/310/440/560/680/800
+                  !  mb edges as ipres(j) above (see n_modis_pres note) --
+                  !  NOT the same value as ipres(j), since modis_ctp_j is a
+                  !  different retrieval than ISCCP's ptop(j,ibox)
 ! BMD 07/26 - end
 
       INTEGER :: debug       ! set to non-zero value to print out inputs
@@ -585,6 +653,9 @@
           tau_phase_cum(j,ibox)=0._wp
           tauf_phase_cum(j,ibox)=0._wp
           phase_active(j,ibox)=.true.
+          ctp_tau_cum(j,ibox)=0._wp
+          ctp_pres_cum(j,ibox)=0._wp
+          ctp_active(j,ibox)=.true.
 ! BMD 07/26 - end
         ENDDO
 15    CONTINUE
@@ -663,6 +734,57 @@
      &                       + phase_tau_incr
                           tauf_phase_cum(j,ibox) = tauf_phase_cum(j,ibox) &
      &                       + phase_tau_incr*phase_f_liq
+                       ENDIF
+                    ENDIF
+                 ENDIF
+              ENDDO
+            ENDDO ! ibox
+      ENDDO ! ilev
+      ENDIF
+! BMD 07/26 - end
+
+! BMD 07/26 - start
+      !CO2-slicing cloud-top-pressure retrieval, ported from COSPv2's
+      !cloud_top_pressure (modis_simulator.F90) via ~/COSPv2.0: an
+      !optical-depth-weighted trapezoidal-rule pressure integral (pressure
+      !assumed to vary linearly across each layer, unlike the phase
+      !discrimination above which assumes a constant value per layer),
+      !restricted to the top modis_co2slicing_taulimit (1.0) of cloud
+      !optical depth from cloud top. Layer-edge pressures come from phalf
+      !(already Pa, TOA-to-surface, same convention as pfull above);
+      !divided by 100 to match this file's mb convention (ptop/boxptop),
+      !so the result can be blended with ptop(j,ibox) (ISCCP's CTP, the
+      !low-cloud fallback) and binned with the same edges as ipres(j)
+      !below without further unit conversion. Only needs dtau_s/frac_out/
+      !phalf (all non-optional) -- gated on PRESENT(fq_modis_tau_ctp)
+      !specifically, independent of the dtau_s_liq/reffl group above,
+      !since the (phase-independent) tau/CTP histogram doesn't need the
+      !liquid/ice split at all.
+      IF (PRESENT(fq_modis_tau_ctp)) THEN
+      DO ilev=1,nlev
+            DO ibox=1,ncol
+              DO j=1,npoints
+                 IF (frac_out(j,ibox,ilev).eq.1._wp .and. &
+     &               ctp_active(j,ibox)) THEN
+                    IF (dtau_s(j,ilev) .gt. 0._wp) THEN
+                       IF (ctp_tau_cum(j,ibox)+dtau_s(j,ilev) .gt. &
+     &                     modis_co2slicing_taulimit) THEN
+                          ctp_deltatau = modis_co2slicing_taulimit &
+     &                       - ctp_tau_cum(j,ibox)
+                          ctp_tau_cum(j,ibox) = ctp_tau_cum(j,ibox) &
+     &                       + ctp_deltatau
+                          ctp_pres_cum(j,ibox) = ctp_pres_cum(j,ibox) &
+     &                       + (phalf(j,ilev)/100._wp)*ctp_deltatau &
+     &                       + ((phalf(j,ilev+1)-phalf(j,ilev))/100._wp) &
+     &                         *ctp_deltatau**2/(2._wp*dtau_s(j,ilev))
+                          ctp_active(j,ibox) = .false.
+                       ELSE
+                          ctp_tau_cum(j,ibox) = ctp_tau_cum(j,ibox) &
+     &                       + dtau_s(j,ilev)
+                          ctp_pres_cum(j,ibox) = ctp_pres_cum(j,ibox) &
+     &                       + dtau_s(j,ilev) &
+     &                         *(phalf(j,ilev)+phalf(j,ilev+1)) &
+     &                         /2._wp/100._wp
                        ENDIF
                     ENDIF
                  ENDIF
@@ -1222,6 +1344,30 @@
       ENDIF
 ! BMD 07/26 - end
 
+! BMD 07/26 - start
+      !reset MODIS-style tau/CTP joint-histogram frequencies (all phases,
+      !liquid-only, ice-only). Same sunlit-only gate as the LWP/IWP reset
+      !above (no top_height==3 IR-only override), and its own PRESENT
+      !check since fq_modis_tau_ctp/_liq/_ice are their own OPTIONAL group.
+      IF (PRESENT(fq_modis_tau_ctp)) THEN
+      DO ilev=1,n_modis_tau
+      DO ilev2=1,n_modis_pres
+        DO j=1,npoints
+             IF (sunlit(j).eq.1) THEN
+                fq_modis_tau_ctp(j,ilev,ilev2)= 0._wp
+                fq_modis_tau_ctp_liq(j,ilev,ilev2)= 0._wp
+                fq_modis_tau_ctp_ice(j,ilev,ilev2)= 0._wp
+             ELSE
+                fq_modis_tau_ctp(j,ilev,ilev2)= output_missing_value
+                fq_modis_tau_ctp_liq(j,ilev,ilev2)= output_missing_value
+                fq_modis_tau_ctp_ice(j,ilev,ilev2)= output_missing_value
+             ENDIF
+        ENDDO
+      ENDDO
+      ENDDO
+      ENDIF
+! BMD 07/26 - end
+
       !reset variables need for averaging cloud properties
       DO j=1,npoints 
         IF (sunlit(j).eq.1 .or. top_height .eq. 3) THEN 
@@ -1370,6 +1516,53 @@
             !clwmodis+climodis
             cltmodis(j) = cltmodis(j) + boxarea
 
+            !MODIS-style tau/CTP joint histogram (all phases). itau(j) was
+            !already computed above for fq_isccp -- reused directly here,
+            !not recomputed, since COSPv2's MODIS tau bins are identical to
+            !this file's ISCCP tau bins (see n_modis_tau note above).
+            !modis_ctp_j is a genuinely different retrieval than ptop(j,ibox)
+            !though: the CO2-sliced ctp_pres_cum/ctp_tau_cum result, falling
+            !back to ptop(j,ibox) (ISCCP's CTP) for low clouds -- ports
+            !COSPv2's modis_subcolumn low-cloud fallback.
+            IF (PRESENT(fq_modis_tau_ctp)) THEN
+              IF ( ctp_tau_cum(j,ibox) .gt. 0._wp ) THEN
+                modis_ctp_j = ctp_pres_cum(j,ibox) / ctp_tau_cum(j,ibox)
+              ELSE
+                modis_ctp_j = 0._wp
+              ENDIF
+              IF ( modis_ctp_j .gt. modis_co2slicing_preslimit_mb ) THEN
+                modis_ctp_j = ptop(j,ibox)
+              ENDIF
+
+              imodis_pres(j) = 0
+              IF (    modis_ctp_j .gt. 0._wp  &
+     &          .and.modis_ctp_j .lt. 180._wp) THEN
+                  imodis_pres(j)=1
+              ELSE IF(modis_ctp_j .ge. 180._wp &
+     &          .and.modis_ctp_j .lt. 310._wp) THEN
+                  imodis_pres(j)=2
+              ELSE IF(modis_ctp_j .ge. 310._wp &
+     &          .and.modis_ctp_j .lt. 440._wp) THEN
+                  imodis_pres(j)=3
+              ELSE IF(modis_ctp_j .ge. 440._wp &
+     &          .and.modis_ctp_j .lt. 560._wp) THEN
+                  imodis_pres(j)=4
+              ELSE IF(modis_ctp_j .ge. 560._wp &
+     &          .and.modis_ctp_j .lt. 680._wp) THEN
+                  imodis_pres(j)=5
+              ELSE IF(modis_ctp_j .ge. 680._wp &
+     &          .and.modis_ctp_j .lt. 800._wp) THEN
+                  imodis_pres(j)=6
+              ELSE IF(modis_ctp_j .ge. 800._wp) THEN
+                  imodis_pres(j)=7
+              ENDIF
+
+              IF (imodis_pres(j) .gt. 0 .and. itau(j) .gt. 0) THEN
+                fq_modis_tau_ctp(j,itau(j),imodis_pres(j)) = &
+     &            fq_modis_tau_ctp(j,itau(j),imodis_pres(j)) + boxarea
+              ENDIF
+            ENDIF
+
             !cloud-top-weighted phase fraction (tau_phase_cum/tauf_phase_cum,
             !ported from weight_by_extinction above) -- NOT the
             !whole-subcolumn tau_liq/tau_ice sums, which remain in use only
@@ -1442,6 +1635,15 @@
      &            fq_modis_lwp_reffl(j,imodis_lwp(j),imodis_reffl(j)) + boxarea
               ENDIF
 
+              !liquid-phase tau/CTP: reuses itau(j)/imodis_pres(j) already
+              !computed above (before the phase branch), same PRESENT gate
+              !as the total tau/CTP write
+              IF (PRESENT(fq_modis_tau_ctp) .and. &
+     &            imodis_pres(j) .gt. 0 .and. itau(j) .gt. 0) THEN
+                fq_modis_tau_ctp_liq(j,itau(j),imodis_pres(j)) = &
+     &            fq_modis_tau_ctp_liq(j,itau(j),imodis_pres(j)) + boxarea
+              ENDIF
+
             ELSE IF (liquid_fraction(j) .ge. 0._wp .and. &
      &        liquid_fraction(j) .le. (1._wp-modis_phase_threshold)) THEN
               !ice-dominated subcolumn -> IWP-vs-ReffIce
@@ -1503,6 +1705,14 @@
               IF (imodis_iwp(j) .gt. 0 .and. imodis_reffi(j) .gt. 0) THEN
                 fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) = &
      &            fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) + boxarea
+              ENDIF
+
+              !ice-phase tau/CTP: same reuse pattern as the liquid branch
+              !above
+              IF (PRESENT(fq_modis_tau_ctp) .and. &
+     &            imodis_pres(j) .gt. 0 .and. itau(j) .gt. 0) THEN
+                fq_modis_tau_ctp_ice(j,itau(j),imodis_pres(j)) = &
+     &            fq_modis_tau_ctp_ice(j,itau(j),imodis_pres(j)) + boxarea
               ENDIF
             ENDIF
             !ELSE: mixed-phase/undetermined subcolumn, or no phase-resolved

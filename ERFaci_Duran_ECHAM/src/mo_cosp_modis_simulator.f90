@@ -49,9 +49,12 @@
 ! time whenever both Lisccp_sim and Lmodis_sim are on, redundantly duplicating
 ! the ISCCP tau/CTP calculation already done by cosp_isccp_simulator -- this
 ! subroutine keeps them as local, discarded work arrays. cosp_modis_simulator's
-! own interface therefore only exposes the two MODIS-specific joint
-! histograms; the ISCCP tau/CTP histogram is computed exactly once, in
-! cosp_isccp_simulator, as it should be.
+! own interface therefore only exposes the MODIS-specific joint histograms
+! (LWP-vs-ReffLiq, IWP-vs-ReffIce, and -- BMD 07/26, second pass -- tau/CTP,
+! tau/CTP-Liq, tau/CTP-Ice, this last group its own genuinely new retrieval,
+! CO2-slicing rather than ISCCP's brightness-temperature CTP, see
+! cosp_icarus.f90); the ISCCP tau/CTP histogram itself is computed exactly
+! once, in cosp_isccp_simulator, as it should be.
 ! BMD 07/26 - end
 
 MODULE mo_cosp_modis_simulator
@@ -77,7 +80,9 @@ SUBROUTINE cosp_modis_simulator(                          &
 !modis
              dtau_s_liq, dtau_s_ice, reffl, reffi,        &
              fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
-             cltmodis, clwmodis, climodis                &
+             cltmodis, clwmodis, climodis,                &
+             fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
+             fq_modis_tau_ctp_ice                         &
              )
 
   ! Arguments
@@ -130,6 +135,17 @@ SUBROUTINE cosp_modis_simulator(                          &
    REAL(wp), INTENT(INOUT) :: cltmodis(kbdim)
    REAL(wp), INTENT(INOUT) :: clwmodis(kbdim)
    REAL(wp), INTENT(INOUT) :: climodis(kbdim)
+
+!  joint histograms of optical thickness vs. cloud-top pressure (all
+!  phases, liquid-only, ice-only). Bin counts (7 tau x 7 CTP) must match
+!  n_modis_tau/n_modis_pres declared in cosp_icarus.f90 -- same
+!  hardcoded-literal convention as fq_modis_lwp_reffl/fq_modis_iwp_reffi
+!  above. cloud-top pressure here is COSPv2's own CO2-slicing retrieval
+!  (see cosp_icarus.f90), NOT ISCCP's brightness-temperature ptop, though
+!  it falls back to it for low clouds.
+   REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp(kbdim,7,7)
+   REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp_liq(kbdim,7,7)
+   REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp_ice(kbdim,7,7)
 
   ! Local variables
   REAL(wp) :: pfull(kbdim, klev)
@@ -185,13 +201,24 @@ SUBROUTINE cosp_modis_simulator(                          &
             meantb_unused,meantbclr_unused,boxtau_unused,boxptop_unused, &
             dtau_s_liq_l,dtau_s_ice_l,reffl_l,reffi_l, &
             fq_modis_lwp_reffl,fq_modis_iwp_reffi, &
-            cltmodis,clwmodis,climodis)
+            cltmodis,clwmodis,climodis, &
+            fq_modis_tau_ctp,fq_modis_tau_ctp_liq,fq_modis_tau_ctp_ice)
 
-  ! No output flip needed here: unlike fq_isccp's pressure axis (see
-  ! cosp_isccp_simulator, which owns that flip), the LWP/IWP and
-  ! ReffLiq/ReffIce bin axes are physical-value thresholds with no dependence
+  ! No output flip needed for the LWP/IWP/ReffLiq/ReffIce histograms: unlike
+  ! fq_isccp's pressure axis (see cosp_isccp_simulator, which owns that
+  ! flip), those bin axes are physical-value thresholds with no dependence
   ! on model level ordering, so icarus's bin index already matches the
   ! intended output convention directly.
+  !
+  ! fq_modis_tau_ctp/_liq/_ice DO need the same pressure-axis flip as
+  ! fq_isccp, though: imodis_pres (cosp_icarus.f90) is binned with the
+  ! identical edges/index convention as ISCCP's own ipres, so it inherits
+  ! the same "index 1 = low pressure" vs. the model's expected output
+  ! ordering mismatch that fq_isccp's own flip below corrects. tau (dim 2)
+  ! is untouched, matching fq_isccp's flip pattern exactly.
+  fq_modis_tau_ctp(:,:,:)     = fq_modis_tau_ctp(:,:,7:1:-1)
+  fq_modis_tau_ctp_liq(:,:,:) = fq_modis_tau_ctp_liq(:,:,7:1:-1)
+  fq_modis_tau_ctp_ice(:,:,:) = fq_modis_tau_ctp_ice(:,:,7:1:-1)
 
 END SUBROUTINE cosp_modis_simulator
 

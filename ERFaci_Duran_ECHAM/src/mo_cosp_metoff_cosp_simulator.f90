@@ -53,7 +53,9 @@ CONTAINS
 !modis
        dtau_s_liq, dtau_s_ice,                      &
        fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
-       cltmodis, clwmodis, climodis                 &
+       cltmodis, clwmodis, climodis,                &
+       fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
+       fq_modis_tau_ctp_ice                         &
 ! BMD 07/26 - end
                                                      )
 
@@ -131,6 +133,12 @@ CONTAINS
   REAL(wp) :: cltmodis(kbdim)
   REAL(wp) :: clwmodis(kbdim)
   REAL(wp) :: climodis(kbdim)
+!  joint histograms of optical thickness vs. cloud-top pressure (all
+!  phases, liquid-only, ice-only) -- bin counts (7,7) must match
+!  n_modis_tau/n_modis_pres declared in cosp_icarus.f90
+  REAL(wp) :: fq_modis_tau_ctp(kbdim,7,7)
+  REAL(wp) :: fq_modis_tau_ctp_liq(kbdim,7,7)
+  REAL(wp) :: fq_modis_tau_ctp_ice(kbdim,7,7)
 ! BMD 07/26 - end
 
 ! subgrid sgx
@@ -170,8 +178,9 @@ CONTAINS
 
 ! BMD 07/26 - start
   !+++++++++ MODIS simulator ++++++++++
-  ! cosp_modis_simulator only returns the two MODIS-specific joint histograms
-  ! (fq_modis_lwp_reffl/fq_modis_iwp_reffi). It still runs the full icarus
+  ! cosp_modis_simulator only returns the MODIS-specific joint histograms
+  ! (fq_modis_lwp_reffl/fq_modis_iwp_reffi and, BMD 07/26 second pass,
+  ! fq_modis_tau_ctp/_liq/_ice). It still runs the full icarus
   ! engine internally (tau/CTP is computed as part of the same subcolumn pass
   ! that produces the MODIS histograms), but the ISCCP-shaped outputs from
   ! that internal call are local/discarded there, not threaded back through
@@ -196,7 +205,9 @@ CONTAINS
       dtau_s_liq, dtau_s_ice,                      &
       Reff(:,:,I_LSCLIQ), Reff(:,:,I_LSCICE),      &
       fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
-      cltmodis, clwmodis, climodis )
+      cltmodis, clwmodis, climodis,                &
+      fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
+      fq_modis_tau_ctp_ice )
   ENDIF
 ! BMD 07/26 - end
 
