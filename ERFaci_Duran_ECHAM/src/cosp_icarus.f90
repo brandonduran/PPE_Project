@@ -429,25 +429,57 @@
       REAL(wp) :: boxarea
 
 ! BMD 07/26 - start
-      REAL(wp) :: tau_liq(npoints,ncol), tau_ice(npoints,ncol)
-                  !  per-subcolumn liquid/ice-only optical depth,
-                  !  accumulated the same way as tau(j,ibox) above but
-                  !  split by phase
-      REAL(wp) :: retau_liq(npoints,ncol), retau_ice(npoints,ncol)
-                  !  per-subcolumn optical-depth-weighted sum of
-                  !  reffl/reffi over the cloudy levels in that
-                  !  subcolumn; divided by tau_liq/tau_ice below to get
-                  !  a single characteristic subcolumn effective radius
       REAL(wp) :: box_reffl(npoints), box_reffi(npoints)
+                  !  retrieved (not model-truth) liquid/ice effective
+                  !  radius (m) for the current subcolumn -- see the
+                  !  simulated-reflectance retrieval block below. Negative
+                  !  (modis_re_fill*1.e-6_wp) means the retrieval failed to
+                  !  bracket a trial size; guarded before binning.
       REAL(wp) :: box_lwp(npoints), box_iwp(npoints)
       REAL(wp) :: liquid_fraction(npoints)
                   !  tauf_phase_cum/tau_phase_cum for the current subcolumn --
                   !  the single per-subcolumn phase-dominance fraction used
                   !  to decide liquid- vs. ice-dominated (see
-                  !  modis_phase_threshold above). NOTE: intentionally NOT
-                  !  tau_liq/(tau_liq+tau_ice) -- see tau_phase_cum below.
+                  !  modis_phase_threshold above and tau_phase_cum below)
       INTEGER  :: imodis_lwp(npoints), imodis_reffl(npoints)
       INTEGER  :: imodis_iwp(npoints), imodis_reffi(npoints)
+
+!     Simulated-reflectance MODIS size retrieval (Stage 4/5 of the port,
+!     BMD 07/26 fourth pass): synthesizes the "observed" near-IR
+!     reflectance per subcolumn from the model's real per-level optical
+!     properties (dpiz_s_nir/dcg_s_nir via two_stream/adding_doubling),
+!     then inverts it against an independent trial-size library
+!     (get_g_nir/get_ssa_nir/two_stream_reflectance/interpolate_to_min,
+!     all ported in the CONTAINS block) -- replaces the previous
+!     retau_liq/tau_liq model-truth shortcut for box_reffl/box_reffi.
+!
+!     Reflectance-synthesis running state, one running (Refl,Tran) pair
+!     per subcolumn, updated top-down over cloudy levels via the same
+!     adding-layers recursion as adding_doubling (called with npts=2 each
+!     time: the running state as "layer 1", this level as "layer 2") --
+!     obs_refl_active tracks whether any cloudy level has been folded in
+!     yet, since the very first contributing level initializes rather
+!     than combines (mirrors adding_doubling's own Refl_cumulative(1) =
+!     Refl(1) special case).
+      LOGICAL  :: obs_refl_active(npoints,ncol)
+      REAL(wp) :: obs_refl_run(npoints,ncol), obs_tran_run(npoints,ncol)
+      REAL(wp) :: refl_layer, tran_layer, refl_combined, tran_combined
+                  !  per-(j,ibox,ilev) scratch scalars for the reflectance
+                  !  synthesis above
+
+!     Trial-size grid and its near-IR optical-property library (Platnick
+!     Collection-6 fits, get_g_nir/get_ssa_nir), computed once per icarus
+!     call (not per subcolumn -- these don't depend on j/ibox) and reused
+!     for every liquid/ice-dominated subcolumn's retrieval below. Units
+!     are microns, matching modis_trial_re_water/ice_min/max's convention.
+      REAL(wp) :: trial_re_w(num_trial_res), trial_re_i(num_trial_res)
+      REAL(wp) :: trial_g_w(num_trial_res), trial_w0_w(num_trial_res)
+      REAL(wp) :: trial_g_i(num_trial_res), trial_w0_i(num_trial_res)
+      REAL(wp) :: predicted_refl_w(num_trial_res), predicted_refl_i(num_trial_res)
+                  !  per-subcolumn predicted-reflectance-vs-trial-size
+                  !  curve, recomputed each liquid-/ice-dominated
+                  !  subcolumn since it depends on that subcolumn's own
+                  !  total tau(j,ibox)
 
       REAL(wp) :: tau_phase_cum(npoints,ncol), tauf_phase_cum(npoints,ncol)
                   !  running (cloud-top-down) cumulative total optical depth
@@ -455,10 +487,8 @@
                   !  to build liquid_fraction above, ports COSPv2's
                   !  weight_by_extinction (modis_simulator.F90) restricted to
                   !  the top modis_phase_taulimit of cloud optical depth --
-                  !  deliberately NOT the same whole-subcolumn tau_liq/tau_ice
-                  !  sums used for the Reff weighting (box_reffl/box_reffi),
-                  !  since a passive VIS/NIR sensor only sees the cloud-top
-                  !  phase, not a full-column average
+                  !  a passive VIS/NIR sensor only sees the cloud-top phase,
+                  !  not a full-column average
       LOGICAL  :: phase_active(npoints,ncol)
                   !  .true. until a subcolumn's cumulative tau reaches
                   !  modis_phase_taulimit; freezes tau_phase_cum/
@@ -685,16 +715,15 @@
           boxptop(j,ibox)=output_missing_value
           box_cloudy(j,ibox)=.false.
 ! BMD 07/26 - start
-          tau_liq(j,ibox)=0._wp
-          tau_ice(j,ibox)=0._wp
-          retau_liq(j,ibox)=0._wp
-          retau_ice(j,ibox)=0._wp
           tau_phase_cum(j,ibox)=0._wp
           tauf_phase_cum(j,ibox)=0._wp
           phase_active(j,ibox)=.true.
           ctp_tau_cum(j,ibox)=0._wp
           ctp_pres_cum(j,ibox)=0._wp
           ctp_active(j,ibox)=.true.
+          obs_refl_active(j,ibox)=.false.
+          obs_refl_run(j,ibox)=0._wp
+          obs_tran_run(j,ibox)=1._wp
 ! BMD 07/26 - end
         ENDDO
 15    CONTINUE
@@ -713,37 +742,16 @@
       ENDDO ! ilev
 
 ! BMD 07/26 - start
-      !compute per-subcolumn liquid/ice optical depth and the
-      !optical-depth-weighted sum of reffl/reffi, needed below to build a
-      !single characteristic liquid/ice effective radius per subcolumn for
-      !the MODIS-style LWP/IWP-vs-Reff joint histograms.
       !Gated: dtau_s_liq/dtau_s_ice/reffl/reffi are OPTIONAL, and it is
       !illegal to reference an absent optional dummy argument -- callers
       !that don't pass this group (e.g. mo_cosp_isccp_simulator.f90) must
-      !skip this block entirely; tau_liq/tau_ice/retau_liq/retau_ice stay
-      !at the 0._wp they were reset to above, which is fine since they're
-      !only consumed by the (equally gated) MODIS histogram block below.
+      !skip this block entirely.
       IF (PRESENT(dtau_s_liq)) THEN
-      DO ilev=1,nlev
-            DO ibox=1,ncol
-              DO j=1,npoints
-                 IF (frac_out(j,ibox,ilev).eq.1._wp) THEN
-                        tau_liq(j,ibox)=tau_liq(j,ibox) + dtau_s_liq(j,ilev)
-                        tau_ice(j,ibox)=tau_ice(j,ibox) + dtau_s_ice(j,ilev)
-                        retau_liq(j,ibox)=retau_liq(j,ibox) &
-     &                     + dtau_s_liq(j,ilev)*reffl(j,ilev)
-                        retau_ice(j,ibox)=retau_ice(j,ibox) &
-     &                     + dtau_s_ice(j,ilev)*reffi(j,ilev)
-                 ENDIF
-              ENDDO
-            ENDDO ! ibox
-      ENDDO ! ilev
 
       !Phase discrimination, ported from COSPv2's weight_by_extinction
       !(modis_simulator.F90) via ~/COSPv2.0: the optical-depth-weighted mean
       !liquid fraction over only the top modis_phase_taulimit (1.0) of cloud
-      !optical depth from cloud top, NOT tau_liq/tau_ice above (which are
-      !whole-subcolumn sums used only for the Reff weighting) -- a passive
+      !optical depth from cloud top -- a passive
       !VIS/NIR sensor only sees the cloud-top phase. ilev=1..nlev is already
       !TOA-to-surface (see pfull/phalf convention above), matching
       !weight_by_extinction's implicit top-down ordering, so no extra flip
@@ -825,6 +833,49 @@
      &                         *(phalf(j,ilev)+phalf(j,ilev+1)) &
      &                         /2._wp/100._wp
                        ENDIF
+                    ENDIF
+                 ENDIF
+              ENDDO
+            ENDDO ! ibox
+      ENDDO ! ilev
+      ENDIF
+! BMD 07/26 - end
+
+! BMD 07/26 - start
+      !Simulated-reflectance synthesis (Stage 4 of the MODIS size-retrieval
+      !port, BMD 07/26 fourth pass), ported from COSPv2's
+      !compute_toa_reflectace/two_stream/adding_doubling (modis_simulator.F90)
+      !via ~/COSPv2.0: synthesizes the "observed" near-IR reflectance per
+      !subcolumn from the model's real per-level tau/single-scattering
+      !albedo/asymmetry, combining cloudy levels top-down via the
+      !adding-layers recursion (same math as adding_doubling in the
+      !CONTAINS block, called here 2 layers at a time: the running state
+      !as "layer 1", the current level as "layer 2" -- mathematically
+      !identical to running the full N-layer recursion at once, since it's
+      !already strictly sequential). No tau limit here -- unlike the
+      !phase/CTP retrievals above, compute_toa_reflectace processes the
+      !whole cloudy profile. Gated on PRESENT(dpiz_s_nir) specifically,
+      !independent of the dtau_s_liq/fq_modis_tau_ctp groups above, since
+      !this only needs dtau_s/dpiz_s_nir/dcg_s_nir/frac_out.
+      IF (PRESENT(dpiz_s_nir)) THEN
+      DO ilev=1,nlev
+            DO ibox=1,ncol
+              DO j=1,npoints
+                 IF (frac_out(j,ibox,ilev).eq.1._wp .and. &
+     &               dtau_s(j,ilev).gt.0._wp) THEN
+                    CALL two_stream(dtau_s(j,ilev), dcg_s_nir(j,ilev), &
+     &                 dpiz_s_nir(j,ilev), refl_layer, tran_layer)
+                    IF (.not. obs_refl_active(j,ibox)) THEN
+                       obs_refl_run(j,ibox) = refl_layer
+                       obs_tran_run(j,ibox) = tran_layer
+                       obs_refl_active(j,ibox) = .true.
+                    ELSE
+                       CALL adding_doubling(2, &
+     &                    (/ obs_refl_run(j,ibox), refl_layer /), &
+     &                    (/ obs_tran_run(j,ibox), tran_layer /), &
+     &                    refl_combined, tran_combined)
+                       obs_refl_run(j,ibox) = refl_combined
+                       obs_tran_run(j,ibox) = tran_combined
                     ENDIF
                  ENDIF
               ENDDO
@@ -1423,7 +1474,27 @@
       ENDDO ! j
 
       boxarea = 1._wp/REAL(ncol,wp)
-     
+
+! BMD 07/26 - start
+      !Trial-size grid and its near-IR optical-property library (Stage 5 of
+      !the MODIS size-retrieval port), ported from COSPv2's COSP_MODIS_INIT
+      !(cosp_modis_interface.F90) via ~/COSPv2.0: computed once per icarus
+      !call, not per subcolumn, since it doesn't depend on j/ibox. Reused
+      !below by every liquid-/ice-dominated subcolumn's retrieval.
+      IF (PRESENT(dpiz_s_nir)) THEN
+         trial_re_w(1:num_trial_res) = modis_trial_re_water_min &
+     &      + (modis_trial_re_water_max-modis_trial_re_water_min) &
+     &        /REAL(num_trial_res-1,wp) * (/(i,i=0,num_trial_res-1)/)
+         trial_re_i(1:num_trial_res) = modis_trial_re_ice_min &
+     &      + (modis_trial_re_ice_max-modis_trial_re_ice_min) &
+     &        /REAL(num_trial_res-1,wp) * (/(i,i=0,num_trial_res-1)/)
+         trial_g_w(1:num_trial_res)  = get_g_nir(.true.,trial_re_w(1:num_trial_res))
+         trial_w0_w(1:num_trial_res) = get_ssa_nir(.true.,trial_re_w(1:num_trial_res))
+         trial_g_i(1:num_trial_res)  = get_g_nir(.false.,trial_re_i(1:num_trial_res))
+         trial_w0_i(1:num_trial_res) = get_ssa_nir(.false.,trial_re_i(1:num_trial_res))
+      ENDIF
+! BMD 07/26 - end
+
       DO 39 ibox=1,ncol
         DO j=1,npoints 
 
@@ -1603,9 +1674,7 @@
             ENDIF
 
             !cloud-top-weighted phase fraction (tau_phase_cum/tauf_phase_cum,
-            !ported from weight_by_extinction above) -- NOT the
-            !whole-subcolumn tau_liq/tau_ice sums, which remain in use only
-            !for the Reff weighting (box_reffl/box_reffi below)
+            !ported from weight_by_extinction above)
             IF ( tau_phase_cum(j,ibox) .gt. (tauchk) ) THEN
               liquid_fraction(j) = tauf_phase_cum(j,ibox) &
      &          / tau_phase_cum(j,ibox)
@@ -1615,8 +1684,28 @@
 
             IF (liquid_fraction(j) .ge. modis_phase_threshold) THEN
               clwmodis(j) = clwmodis(j) + boxarea
-              !liquid-dominated subcolumn -> LWP-vs-ReffLiq
-              box_reffl(j) = retau_liq(j,ibox) / tau_liq(j,ibox)
+              !liquid-dominated subcolumn -> LWP-vs-ReffLiq. box_reffl comes
+              !from the simulated-reflectance retrieval (Stage 5 of the
+              !port): invert the predicted-reflectance-vs-trial-size curve
+              !(this subcolumn's total tau against the liquid trial
+              !library) against the synthesized observed reflectance
+              !(obs_refl_run, Stage 4 above). Negative
+              !(modis_re_fill*1.e-6_wp) means no bracket was found -- the
+              !observed reflectance falls outside what any trial liquid
+              !size can produce -- the real mechanism a MODIS retrieval
+              !goes missing by, not a direct threshold on some "true" size.
+              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
+                 predicted_refl_w(1:num_trial_res) = two_stream_reflectance( &
+     &              tau(j,ibox), trial_g_w(1:num_trial_res), &
+     &              trial_w0_w(1:num_trial_res))
+                 box_reffl(j) = 1.e-6_wp * interpolate_to_min( &
+     &              trial_re_w(1:num_trial_res), &
+     &              predicted_refl_w(1:num_trial_res), obs_refl_run(j,ibox))
+              ELSE
+                 box_reffl(j) = -1._wp
+              ENDIF
+
+              IF (box_reffl(j) .ge. 0._wp) THEN
               box_lwp(j) = modis_lwp_conversion * box_reffl(j) * tau(j,ibox)
 
               imodis_lwp(j) = 0
@@ -1673,6 +1762,12 @@
                 fq_modis_lwp_reffl(j,imodis_lwp(j),imodis_reffl(j)) = &
      &            fq_modis_lwp_reffl(j,imodis_lwp(j),imodis_reffl(j)) + boxarea
               ENDIF
+              ENDIF
+              !ENDIF above closes the box_reffl(j).ge.0._wp guard -- the
+              !tau/CTP-Liq write below does NOT depend on box_reffl, so it
+              !stays outside that guard: a real MODIS retrieval's phase
+              !classification and tau/CTP histogram don't depend on
+              !whether the (separate) size retrieval also succeeded.
 
               !liquid-phase tau/CTP: reuses itau(j)/imodis_pres(j) already
               !computed above (before the phase branch), same PRESENT gate
@@ -1685,9 +1780,22 @@
 
             ELSE IF (liquid_fraction(j) .ge. 0._wp .and. &
      &        liquid_fraction(j) .le. (1._wp-modis_phase_threshold)) THEN
-              !ice-dominated subcolumn -> IWP-vs-ReffIce
+              !ice-dominated subcolumn -> IWP-vs-ReffIce. box_reffi is the
+              !ice-library counterpart of box_reffl above -- see the notes
+              !there.
               climodis(j) = climodis(j) + boxarea
-              box_reffi(j) = retau_ice(j,ibox) / tau_ice(j,ibox)
+              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
+                 predicted_refl_i(1:num_trial_res) = two_stream_reflectance( &
+     &              tau(j,ibox), trial_g_i(1:num_trial_res), &
+     &              trial_w0_i(1:num_trial_res))
+                 box_reffi(j) = 1.e-6_wp * interpolate_to_min( &
+     &              trial_re_i(1:num_trial_res), &
+     &              predicted_refl_i(1:num_trial_res), obs_refl_run(j,ibox))
+              ELSE
+                 box_reffi(j) = -1._wp
+              ENDIF
+
+              IF (box_reffi(j) .ge. 0._wp) THEN
               box_iwp(j) = modis_lwp_conversion * modis_ice_density &
      &          * box_reffi(j) * tau(j,ibox)
 
@@ -1745,6 +1853,9 @@
                 fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) = &
      &            fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) + boxarea
               ENDIF
+              ENDIF
+              !ENDIF above closes the box_reffi(j).ge.0._wp guard -- see
+              !the equivalent note in the liquid branch above.
 
               !ice-phase tau/CTP: same reuse pattern as the liquid branch
               !above
