@@ -407,9 +407,9 @@ END SUBROUTINE cosp_initialize
 !  are actually written to output, independent of either switch, so
 !  widening the allocation gate here has no effect on what appears in a
 !  MODIS-only user's output. piz3d_nir/cg3d_nir (near-IR single-scattering
-!  albedo/asymmetry) are new (BMD 07/26, third pass): input to the planned
-!  simulated-reflectance MODIS size retrieval in cosp_icarus.f90, not yet
-!  wired past call_cospsimulator's dpiz_s_nir/dcg_s_nir below.
+!  albedo/asymmetry) are new (BMD 07/26, third pass): input to the
+!  simulated-reflectance MODIS size retrieval in cosp_icarus.f90 -- threaded
+!  all the way through icarus now, but not yet consumed by its main body.
    IF (Lisccp_sim .OR. Lmodis_sim) THEN
       CALL add_stream_element (scosp, 'cisccp_tau3d', cisccp_cldtau3d, &
                            leveltype = HYBRID, lpost=extra_output,  &
@@ -584,9 +584,10 @@ END SUBROUTINE cosp_initialize
 !  near-IR (3.7um, band 1) single-scattering albedo/asymmetry parameter,
 !  sourced from cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir the same way
 !  dtau_s_liq/dtau_s_ice come from cisccp_cldtau3d_liq/_ice -- input to
-!  the planned simulated-reflectance MODIS size retrieval in
-!  cosp_icarus.f90 (BMD 07/26, third pass). Not yet passed to CALL cosp()
-!  below: icarus/cosp_modis_simulator don't have dummy args for these yet.
+!  the simulated-reflectance MODIS size retrieval (BMD 07/26, third pass).
+!  Threaded through icarus/cosp_modis_simulator now, but not yet consumed
+!  by icarus's main body (that's the next stage: the reflectance-synthesis
+!  loop and replacing the box_reffl/box_reffi model-truth shortcut).
     REAL(wp) :: dpiz_s_nir(kproma,klev)
     REAL(wp) :: dcg_s_nir(kproma,klev)
     REAL(wp) :: fq_modis_lwp_reffl(kproma,7,8)
@@ -906,7 +907,8 @@ END SUBROUTINE cosp_initialize
               fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
               cltmodis, clwmodis, climodis,                &
               fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
-              fq_modis_tau_ctp_ice )
+              fq_modis_tau_ctp_ice,                        &
+              dpiz_s_nir, dcg_s_nir )
 ! BMD 07/26 - end
    
 

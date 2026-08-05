@@ -27,7 +27,8 @@
      &     dtau_s_liq, dtau_s_ice, reffl, reffi, &
      &     fq_modis_lwp_reffl, fq_modis_iwp_reffi, &
      &     cltmodis, clwmodis, climodis, &
-     &     fq_modis_tau_ctp, fq_modis_tau_ctp_liq, fq_modis_tau_ctp_ice &
+     &     fq_modis_tau_ctp, fq_modis_tau_ctp_liq, fq_modis_tau_ctp_ice, &
+     &     dpiz_s_nir, dcg_s_nir &
 ! BMD 07/26 - end
      &)
 
@@ -242,6 +243,16 @@
                   !  model levels
       REAL(wp), OPTIONAL :: reffi(npoints,nlev)
                   !  ice crystal effective radius (m) on full model levels
+      REAL(wp), OPTIONAL :: dpiz_s_nir(npoints,nlev)
+                  !  near-IR (3.7 micron, ECHAM SW band 1) single-scattering
+                  !  albedo of the cloudy part of the grid box -- input to
+                  !  the simulated-reflectance MODIS size retrieval (see the
+                  !  CONTAINS block at the end of this file), not yet
+                  !  consumed by the main body (BMD 07/26, third pass,
+                  !  Stage 3 of the retrieval port -- wiring only so far)
+      REAL(wp), OPTIONAL :: dcg_s_nir(npoints,nlev)
+                  !  near-IR (3.7 micron) asymmetry parameter, same status
+                  !  as dpiz_s_nir above
 ! BMD 07/26 - end
 
       INTEGER :: overlap                   !  overlap type

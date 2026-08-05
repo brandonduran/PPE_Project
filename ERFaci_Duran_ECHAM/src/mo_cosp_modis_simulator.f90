@@ -83,7 +83,8 @@ SUBROUTINE cosp_modis_simulator(                          &
              fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
              cltmodis, clwmodis, climodis,                &
              fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
-             fq_modis_tau_ctp_ice                         &
+             fq_modis_tau_ctp_ice,                        &
+             dpiz_s_nir, dcg_s_nir                        &
              )
 
   ! Arguments
@@ -148,6 +149,14 @@ SUBROUTINE cosp_modis_simulator(                          &
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp_liq(kbdim,7,7)
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp_ice(kbdim,7,7)
 
+!  near-IR (3.7 micron) single-scattering albedo/asymmetry, sourced from
+!  cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir via mo_cosp_simulator.f90's
+!  dpiz_s_nir/dcg_s_nir -- input to the simulated-reflectance size
+!  retrieval in cosp_icarus.f90 (BMD 07/26, third pass; not yet consumed
+!  by icarus's main body, Stage 3 wiring only so far).
+   REAL(wp), INTENT(INOUT) :: dpiz_s_nir(kbdim,klev)
+   REAL(wp), INTENT(INOUT) :: dcg_s_nir(kbdim,klev)
+
   ! Local variables
   REAL(wp) :: pfull(kbdim, klev)
   REAL(wp) :: phalf(kbdim, klev + 1)
@@ -163,6 +172,8 @@ SUBROUTINE cosp_modis_simulator(                          &
   REAL(wp) :: dtau_s_ice_l(kbdim, klev)
   REAL(wp) :: reffl_l(kbdim, klev)
   REAL(wp) :: reffi_l(kbdim, klev)
+  REAL(wp) :: dpiz_s_nir_l(kbdim, klev)
+  REAL(wp) :: dcg_s_nir_l(kbdim, klev)
 
 ! icarus always computes the ISCCP tau/CTP histogram and its associated
 ! cloud-top-pressure/mean quantities as a side effect of computing per-
@@ -191,6 +202,8 @@ SUBROUTINE cosp_modis_simulator(                          &
   dtau_s_ice_l = dtau_s_ice(:,klev:1:-1)
   reffl_l      = reffl(:,klev:1:-1)
   reffi_l      = reffi(:,klev:1:-1)
+  dpiz_s_nir_l = dpiz_s_nir(:,klev:1:-1)
+  dcg_s_nir_l  = dcg_s_nir(:,klev:1:-1)
 
   CALL icarus(0,0,kbdim,sunlit_l,klev,ncolumns, &
             pfull,phalf,qv,cc,dtau_s_l, &
@@ -203,7 +216,8 @@ SUBROUTINE cosp_modis_simulator(                          &
             dtau_s_liq_l,dtau_s_ice_l,reffl_l,reffi_l, &
             fq_modis_lwp_reffl,fq_modis_iwp_reffi, &
             cltmodis,clwmodis,climodis, &
-            fq_modis_tau_ctp,fq_modis_tau_ctp_liq,fq_modis_tau_ctp_ice)
+            fq_modis_tau_ctp,fq_modis_tau_ctp_liq,fq_modis_tau_ctp_ice, &
+            dpiz_s_nir_l,dcg_s_nir_l)
 
   ! No output flip needed for the LWP/IWP/ReffLiq/ReffIce histograms: unlike
   ! fq_isccp's pressure axis (see cosp_isccp_simulator, which owns that

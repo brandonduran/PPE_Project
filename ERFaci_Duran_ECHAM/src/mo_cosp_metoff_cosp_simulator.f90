@@ -55,7 +55,8 @@ CONTAINS
        fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
        cltmodis, clwmodis, climodis,                &
        fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
-       fq_modis_tau_ctp_ice                         &
+       fq_modis_tau_ctp_ice,                        &
+       dpiz_s_nir, dcg_s_nir                        &
 ! BMD 07/26 - end
                                                      )
 
@@ -139,6 +140,10 @@ CONTAINS
   REAL(wp) :: fq_modis_tau_ctp(kbdim,7,7)
   REAL(wp) :: fq_modis_tau_ctp_liq(kbdim,7,7)
   REAL(wp) :: fq_modis_tau_ctp_ice(kbdim,7,7)
+!  near-IR (3.7 micron) single-scattering albedo/asymmetry, passed straight
+!  through to cosp_modis_simulator (ISCCP doesn't need these)
+  REAL(wp) :: dpiz_s_nir(kbdim,klev)
+  REAL(wp) :: dcg_s_nir(kbdim,klev)
 ! BMD 07/26 - end
 
 ! subgrid sgx
@@ -207,7 +212,8 @@ CONTAINS
       fq_modis_lwp_reffl, fq_modis_iwp_reffi,      &
       cltmodis, clwmodis, climodis,                &
       fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
-      fq_modis_tau_ctp_ice )
+      fq_modis_tau_ctp_ice,                        &
+      dpiz_s_nir, dcg_s_nir )
   ENDIF
 ! BMD 07/26 - end
 
