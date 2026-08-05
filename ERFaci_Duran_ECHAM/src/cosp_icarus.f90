@@ -155,6 +155,35 @@
 !     binned without a unit conversion at every use site.
       REAL(wp), PARAMETER :: modis_co2slicing_taulimit = 1._wp
       REAL(wp), PARAMETER :: modis_co2slicing_preslimit_mb = 700._wp
+
+!     Simulated-reflectance size retrieval, ported from COSPv2's
+!     modis_subcolumn/get_g_nir/get_ssa_nir (modis_simulator.F90) via
+!     ~/COSPv2.0 -- see the CONTAINS block at the end of this file for the
+!     ported procedures themselves (fit_to_quadratic/fit_to_cubic,
+!     get_g_nir/get_ssa_nir, two_stream/two_stream_reflectance,
+!     adding_doubling, interpolate_to_min). This is Stage 2 of the port:
+!     the procedures exist but are not yet called from icarus's main body
+!     (that's a later stage -- synthesizing the observed reflectance via
+!     two_stream/adding_doubling over dpiz_s_nir/dcg_s_nir, then inverting
+!     against these trial-size libraries via interpolate_to_min, replacing
+!     the current box_reffl/box_reffi model-truth shortcut).
+!
+!     Trial-size grid bounds, in MICRONS (matching COSPv2's own unit
+!     convention for these specific constants -- NOT the meters convention
+!     the rest of this file's reffl/reffi/bin-edge code uses). Only the
+!     final retrieved size, after interpolate_to_min, gets converted to
+!     meters (multiply by 1.e-6_wp), exactly as COSPv2 does at its own
+!     retrievedSize(i) = 1.0e-06_wp*interpolate_to_min(...) call site.
+      INTEGER, PARAMETER :: num_trial_res = 15
+      REAL(wp), PARAMETER :: modis_trial_re_water_min = 4._wp   ! micron
+      REAL(wp), PARAMETER :: modis_trial_re_water_max = 30._wp  ! micron
+      REAL(wp), PARAMETER :: modis_trial_re_ice_min = 5._wp     ! micron
+      REAL(wp), PARAMETER :: modis_trial_re_ice_max = 90._wp    ! micron
+
+!     Missing-value sentinel for a failed size retrieval (COSPv2's
+!     re_fill), in microns -- matches the trial-grid unit convention above,
+!     not the meters convention used once the final result is converted.
+      REAL(wp), PARAMETER :: modis_re_fill = -999._wp           ! micron
 ! BMD 07/26 - end
 
 !     -----
@@ -1807,6 +1836,290 @@
                write (6,'(8f7.2)') (ptop(j,ibox),ibox=1,ncolprint)
              ENDIF 
         ENDDO
-      ENDIF 
+      ENDIF
+
+! BMD 07/26 - start
+!     Simulated-reflectance MODIS size-retrieval procedures, ported from
+!     ~/COSPv2.0/src/simulator/MODIS_simulator/modis_simulator.F90.
+!     Internal (CONTAINS'd) rather than separate external procedures: some
+!     of these are ELEMENTAL and called with array arguments (the 15-point
+!     trial-size grid) from the main body, which requires an explicit
+!     interface visible at the call site -- host association gives that
+!     automatically, without a separate INTERFACE block. IMPLICIT NONE is
+!     inherited from the host subroutine, not repeated below. Some local
+!     variable names below (tau, g, w0, f, beta, den, rk, th, e1, e2, ...)
+!     are ported verbatim from modis_simulator.F90 and are NOT the same as
+!     this subroutine's own host-scope variables of similar names (e.g.
+!     the host's tau(npoints,ncol)) -- Fortran scoping shadows these
+!     correctly within each internal procedure's own body, but readers
+!     should not assume any connection to the host's tau array.
+      CONTAINS
+
+      PURE FUNCTION fit_to_cubic(x, coefficients) RESULT(y)
+      REAL(wp), INTENT(IN) :: x
+      REAL(wp), INTENT(IN) :: coefficients(4)
+      REAL(wp) :: y
+      y = coefficients(1) + x*(coefficients(2) &
+     &  + x*(coefficients(3) + x*coefficients(4)))
+      END FUNCTION fit_to_cubic
+
+      PURE FUNCTION fit_to_quadratic(x, coefficients) RESULT(y)
+      REAL(wp), INTENT(IN) :: x
+      REAL(wp), INTENT(IN) :: coefficients(3)
+      REAL(wp) :: y
+      y = coefficients(1) + x*(coefficients(2) + x*coefficients(3))
+      END FUNCTION fit_to_quadratic
+
+!     Polynomial fits for near-IR (3.7 micron, Collection-6) asymmetry
+!     parameter (get_g_nir) and single-scattering albedo (get_ssa_nir) as
+!     functions of particle size, ported verbatim (fits from Steve
+!     Platnick). re is in MICRONS. Adapted: takes a LOGICAL is_liquid
+!     instead of an INTEGER phase enum -- this file already classifies
+!     phase via liquid_fraction/modis_phase_threshold directly, so
+!     phaseIsLiquid/phaseIsIce/etc. were not ported.
+      ELEMENTAL FUNCTION get_g_nir(is_liquid, re) RESULT(g_nir)
+      LOGICAL, INTENT(IN) :: is_liquid
+      REAL(wp), INTENT(IN) :: re
+      REAL(wp) :: g_nir
+      REAL(wp), PARAMETER :: ice_coefficients(3) = &
+     &  (/ 0.7490_wp, 6.5153e-3_wp, -5.4136e-5_wp /)
+      REAL(wp), PARAMETER :: small_water_coefficients(3) = &
+     &  (/ 1.0364_wp, -8.8800e-2_wp, 7.0000e-3_wp /)
+      REAL(wp), PARAMETER :: big_water_coefficients(4) = &
+     &  (/ 0.6035_wp, 2.8993e-2_wp, -1.1051e-3_wp, 1.5134e-5_wp /)
+
+      IF (is_liquid) THEN
+         IF (re .lt. 7._wp) THEN
+            g_nir = fit_to_quadratic(re, small_water_coefficients)
+            IF (re .lt. modis_trial_re_water_min) g_nir = &
+     &         fit_to_quadratic(modis_trial_re_water_min, small_water_coefficients)
+         ELSE
+            g_nir = fit_to_cubic(re, big_water_coefficients)
+            IF (re .gt. modis_trial_re_water_max) g_nir = &
+     &         fit_to_cubic(modis_trial_re_water_max, big_water_coefficients)
+         ENDIF
+      ELSE
+         g_nir = fit_to_quadratic(re, ice_coefficients)
+         IF (re .lt. modis_trial_re_ice_min) g_nir = &
+     &      fit_to_quadratic(modis_trial_re_ice_min, ice_coefficients)
+         IF (re .gt. modis_trial_re_ice_max) g_nir = &
+     &      fit_to_quadratic(modis_trial_re_ice_max, ice_coefficients)
+      ENDIF
+      END FUNCTION get_g_nir
+
+      ELEMENTAL FUNCTION get_ssa_nir(is_liquid, re) RESULT(ssa_nir)
+      LOGICAL, INTENT(IN) :: is_liquid
+      REAL(wp), INTENT(IN) :: re
+      REAL(wp) :: ssa_nir
+      REAL(wp), PARAMETER :: ice_coefficients(4) = &
+     &  (/ 0.9625_wp, -1.8069e-2_wp, 3.3281e-4_wp, -2.2865e-6_wp /)
+      REAL(wp), PARAMETER :: water_coefficients(3) = &
+     &  (/ 1.0044_wp, -1.1397e-2_wp, 1.3300e-4_wp /)
+
+      IF (is_liquid) THEN
+         ssa_nir = fit_to_quadratic(re, water_coefficients)
+         IF (re .lt. modis_trial_re_water_min) ssa_nir = &
+     &      fit_to_quadratic(modis_trial_re_water_min, water_coefficients)
+         IF (re .gt. modis_trial_re_water_max) ssa_nir = &
+     &      fit_to_quadratic(modis_trial_re_water_max, water_coefficients)
+      ELSE
+         ssa_nir = fit_to_cubic(re, ice_coefficients)
+         IF (re .lt. modis_trial_re_ice_min) ssa_nir = &
+     &      fit_to_cubic(modis_trial_re_ice_min, ice_coefficients)
+         IF (re .gt. modis_trial_re_ice_max) ssa_nir = &
+     &      fit_to_cubic(modis_trial_re_ice_max, ice_coefficients)
+      ENDIF
+      END FUNCTION get_ssa_nir
+
+!     Single-aggregate-layer reflectance via the delta-Eddington two-stream
+!     approximation (Joseph et al. 1976; code from Lazaros Oreopoulos via
+!     Steve Platnick), ported verbatim. Used for the trial-size PREDICTED
+!     reflectance curve (whole subcolumn treated as one layer with its
+!     total tau) -- NOT the same code path as two_stream/adding_doubling
+!     below, which build the multi-level OBSERVED reflectance from the
+!     model's real per-level vertical structure. This split (simplified
+!     single-layer retrieval assumption vs. real multi-layer truth) is
+!     itself part of the genuine retrieval algorithm being simulated, not
+!     something to reconcile.
+      ELEMENTAL FUNCTION two_stream_reflectance(tauint, gint, w0int) RESULT(refl)
+      REAL(wp), INTENT(IN) :: tauint, gint, w0int
+      REAL(wp) :: refl
+      INTEGER, PARAMETER :: beam = 2
+      REAL(wp), PARAMETER :: xmu = 0.866_wp, minConservativeW0 = 0.9999999_wp
+      REAL(wp) :: tau, w0, g, f, gamma1, gamma2, gamma3, gamma4, &
+     &  a1, a2, rk, r1, r2, r3, r4, r5, t1, t2, t3, t4, t5, &
+     &  beta, e1, e2, ef1, ef2
+
+      f   = gint**2
+      tau = (1._wp - w0int*f) * tauint
+      w0  = (1._wp - f) * w0int / (1._wp - w0int*f)
+      g   = (gint - f) / (1._wp - f)
+
+      gamma1 =  (7._wp - w0*(4._wp + 3._wp*g)) / 4._wp
+      gamma2 = -(1._wp - w0*(4._wp - 3._wp*g)) / 4._wp
+      gamma3 =  (2._wp - 3._wp*g*xmu) / 4._wp
+      gamma4 =   1._wp - gamma3
+
+      IF (w0int .gt. minConservativeW0) THEN
+         !Conservative scattering (beam=2 only, matches modis_simulator.F90)
+         refl = gamma1*tau / (1._wp + gamma1*tau)
+      ELSE
+         !Non-conservative scattering
+         a1 = gamma1*gamma4 + gamma2*gamma3
+         a2 = gamma1*gamma3 + gamma2*gamma4
+         rk = sqrt(gamma1**2 - gamma2**2)
+
+         r1 = (1._wp - rk*xmu) * (a2 + rk*gamma3)
+         r2 = (1._wp + rk*xmu) * (a2 - rk*gamma3)
+         r3 = 2._wp*rk * (gamma3 - a2*xmu)
+         r4 = (1._wp - (rk*xmu)**2) * (rk + gamma1)
+         r5 = (1._wp - (rk*xmu)**2) * (rk - gamma1)
+
+         t1 = (1._wp + rk*xmu) * (a1 + rk*gamma4)
+         t2 = (1._wp - rk*xmu) * (a1 - rk*gamma4)
+         t3 = 2._wp*rk * (gamma4 + a1*xmu)
+         t4 = r4
+         t5 = r5
+
+         beta = -r5/r4
+
+         e1 = min(rk*tau, 500._wp)
+         e2 = min(tau/xmu, 500._wp)
+
+         ef1 = exp(-e1)
+         ef2 = exp(-2*e1)
+         refl = (gamma2*(1._wp-ef2)) / ((rk+gamma1)*(1._wp-beta*ef2))
+      ENDIF
+      END FUNCTION two_stream_reflectance
+
+!     Per-layer reflectance/transmittance, same delta-Eddington math as
+!     two_stream_reflectance above but returning both ref and tra (needed
+!     by adding_doubling below to combine multiple real layers) --
+!     ported verbatim.
+      PURE SUBROUTINE two_stream(tauint, gint, w0int, ref, tra)
+      REAL(wp), INTENT(IN) :: tauint, gint, w0int
+      REAL(wp), INTENT(OUT) :: ref, tra
+      INTEGER, PARAMETER :: beam = 2
+      REAL(wp), PARAMETER :: xmu = 0.866_wp, minConservativeW0 = 0.9999999_wp
+      REAL(wp) :: tau, w0, g, f, gamma1, gamma2, gamma3, gamma4, &
+     &  a1, a2, rk, r1, r2, r3, r4, r5, t1, t2, t3, t4, t5, &
+     &  beta, e1, e2, ef1, ef2
+
+      f   = gint**2
+      tau = (1._wp - w0int*f) * tauint
+      w0  = (1._wp - f) * w0int / (1._wp - w0int*f)
+      g   = (gint - f) / (1._wp - f)
+
+      gamma1 =  (7._wp - w0*(4._wp + 3._wp*g)) / 4._wp
+      gamma2 = -(1._wp - w0*(4._wp - 3._wp*g)) / 4._wp
+      gamma3 =  (2._wp - 3._wp*g*xmu) / 4._wp
+      gamma4 =   1._wp - gamma3
+
+      IF (w0int .gt. minConservativeW0) THEN
+         !Conservative scattering (beam=2 only)
+         ref = gamma1*tau / (1._wp + gamma1*tau)
+         tra = 1._wp - ref
+      ELSE
+         !Non-conservative scattering
+         a1 = gamma1*gamma4 + gamma2*gamma3
+         a2 = gamma1*gamma3 + gamma2*gamma4
+         rk = sqrt(gamma1**2 - gamma2**2)
+
+         r1 = (1._wp - rk*xmu) * (a2 + rk*gamma3)
+         r2 = (1._wp + rk*xmu) * (a2 - rk*gamma3)
+         r3 = 2._wp*rk * (gamma3 - a2*xmu)
+         r4 = (1._wp - (rk*xmu)**2) * (rk + gamma1)
+         r5 = (1._wp - (rk*xmu)**2) * (rk - gamma1)
+
+         t1 = (1._wp + rk*xmu) * (a1 + rk*gamma4)
+         t2 = (1._wp - rk*xmu) * (a1 - rk*gamma4)
+         t3 = 2._wp*rk * (gamma4 + a1*xmu)
+         t4 = r4
+         t5 = r5
+
+         beta = -r5/r4
+
+         e1 = min(rk*tau, 500._wp)
+         e2 = min(tau/xmu, 500._wp)
+
+         ef1 = exp(-e1)
+         ef2 = exp(-2*e1)
+         ref = (gamma2*(1._wp-ef2)) / ((rk+gamma1)*(1._wp-beta*ef2))
+         tra = (2._wp*rk*ef1) / ((rk+gamma1)*(1._wp-beta*ef2))
+      ENDIF
+      END SUBROUTINE two_stream
+
+!     Combine per-layer (Refl,Tran) pairs into a single stack (Refl_tot,
+!     Tran_tot) via the adding-layers formula, sequentially from index 1
+!     (TOA-most, matching this file's own pfull/phalf TOA-to-surface
+!     convention) downward -- ported verbatim.
+      PURE SUBROUTINE adding_doubling(npts, Refl, Tran, Refl_tot, Tran_tot)
+      INTEGER, INTENT(IN) :: npts
+      REAL(wp), INTENT(IN) :: Refl(npts), Tran(npts)
+      REAL(wp), INTENT(OUT) :: Refl_tot, Tran_tot
+      INTEGER :: i
+      REAL(wp) :: Refl_cumulative(npts), Tran_cumulative(npts)
+
+      Refl_cumulative(1) = Refl(1)
+      Tran_cumulative(1) = Tran(1)
+
+      DO i=2,npts
+         Refl_cumulative(i) = Refl_cumulative(i-1) + Refl(i) &
+     &     * (Tran_cumulative(i-1)**2) &
+     &     / (1._wp - Refl_cumulative(i-1)*Refl(i))
+         Tran_cumulative(i) = (Tran_cumulative(i-1)*Tran(i)) &
+     &     / (1._wp - Refl_cumulative(i-1)*Refl(i))
+      ENDDO
+
+      Refl_tot = Refl_cumulative(npts)
+      Tran_tot = Tran_cumulative(npts)
+      END SUBROUTINE adding_doubling
+
+!     Given a predicted-reflectance-vs-trial-size curve (y as a function
+!     of x), find the trial size whose predicted reflectance brackets the
+!     observed reflectance yobs, linearly interpolating between the two
+!     bracketing trial points -- ported verbatim. Returns modis_re_fill
+!     (micron) if no bracket is found (the observed reflectance falls
+!     outside what any trial size in [min,max] can produce): this is the
+!     actual mechanism real MODIS retrievals go missing by, NOT a direct
+!     comparison of some "true" size against modis_trial_re_water_min/max
+!     (see the note on this distinction from the design discussion this
+!     was ported from).
+      PURE FUNCTION interpolate_to_min(x, y, yobs) RESULT(x_min)
+      REAL(wp), INTENT(IN) :: x(num_trial_res), y(num_trial_res)
+      REAL(wp), INTENT(IN) :: yobs
+      REAL(wp) :: x_min
+      REAL(wp) :: diff(num_trial_res)
+      INTEGER :: minDiffLoc, lowerBound, upperBound
+
+      diff(1:num_trial_res) = y(1:num_trial_res) - yobs
+      minDiffLoc = minloc(abs(diff), dim=1)
+
+      IF (minDiffLoc .eq. 1) THEN
+         lowerBound = minDiffLoc
+         upperBound = minDiffLoc + 1
+      ELSE IF (minDiffLoc .eq. num_trial_res) THEN
+         lowerBound = minDiffLoc - 1
+         upperBound = minDiffLoc
+      ELSE
+         IF (diff(minDiffLoc-1)*diff(minDiffLoc) .lt. 0._wp) THEN
+            lowerBound = minDiffLoc - 1
+            upperBound = minDiffLoc
+         ELSE
+            lowerBound = minDiffLoc
+            upperBound = minDiffLoc + 1
+         ENDIF
+      ENDIF
+
+      IF (diff(lowerBound)*diff(upperBound) .lt. 0._wp) THEN
+         !Root is bracketed -- interpolate linearly
+         x_min = x(upperBound) - diff(upperBound) &
+     &     * (x(upperBound) - x(lowerBound)) &
+     &     / (diff(upperBound) - diff(lowerBound))
+      ELSE
+         x_min = modis_re_fill
+      ENDIF
+      END FUNCTION interpolate_to_min
+! BMD 07/26 - end
 
       END SUBROUTINE icarus 
