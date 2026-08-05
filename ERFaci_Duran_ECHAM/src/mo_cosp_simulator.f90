@@ -98,6 +98,10 @@ MODULE mo_cosp_simulator
                                              ! MODIS tau-vs-CTP joint histogram (liquid-only), 49 = 7x7 bins flattened
   TYPE (vmem2d), PRIVATE, POINTER :: modis_tau_ctp_ice_types(:)
                                              ! MODIS tau-vs-CTP joint histogram (ice-only), 49 = 7x7 bins flattened
+  TYPE (vmem2d), PRIVATE, POINTER :: modis_tau_reffl_types(:)
+                                             ! MODIS tau-vs-ReffLiq joint histogram, 56 = 7x8 bins flattened
+  TYPE (vmem2d), PRIVATE, POINTER :: modis_tau_reffi_types(:)
+                                             ! MODIS tau-vs-ReffIce joint histogram, 56 = 7x8 bins flattened
 ! BMD 07/26 - end
   TYPE (vmem2d), PRIVATE, POINTER :: cosp_parasol_refl(:)   
                                              ! PARASOL reflectance for 5 bins of solar zenith angle
@@ -477,6 +481,20 @@ END SUBROUTINE cosp_initialize
                 longname='Fraction covered by MODIS tau-CTP (ice) joint-histogram type')
       ENDDO
 
+      ALLOCATE(modis_tau_reffl_types(56))
+      DO i=1,56
+            WRITE(name, '(a8,i2.2)') 'modtaurl',i
+         CALL add_stream_element (scosp, name, modis_tau_reffl_types(i)%ptr2,  &
+                longname='Fraction covered by MODIS tau-ReffLiq joint-histogram type')
+      ENDDO
+
+      ALLOCATE(modis_tau_reffi_types(56))
+      DO i=1,56
+            WRITE(name, '(a8,i2.2)') 'modtauri',i
+         CALL add_stream_element (scosp, name, modis_tau_reffi_types(i)%ptr2,  &
+                longname='Fraction covered by MODIS tau-ReffIce joint-histogram type')
+      ENDDO
+
    END IF!Lmodis_sim
 ! BMD 07/26 - end
 
@@ -601,6 +619,10 @@ END SUBROUTINE cosp_initialize
     REAL(wp) :: fq_modis_tau_ctp(kproma,7,7)
     REAL(wp) :: fq_modis_tau_ctp_liq(kproma,7,7)
     REAL(wp) :: fq_modis_tau_ctp_ice(kproma,7,7)
+!  joint histograms of optical thickness vs. retrieved liquid/ice effective
+!  radius (BMD 08/26)
+    REAL(wp) :: fq_modis_tau_reffl(kproma,7,8)
+    REAL(wp) :: fq_modis_tau_reffi(kproma,7,8)
 ! BMD 07/26 - end
 
     INTEGER:: k,j,i, itau, ipres, jk, jkb, jl
@@ -688,6 +710,8 @@ END SUBROUTINE cosp_initialize
     fq_modis_tau_ctp     = 0.0_wp
     fq_modis_tau_ctp_liq = 0.0_wp
     fq_modis_tau_ctp_ice = 0.0_wp
+    fq_modis_tau_reffl = 0.0_wp
+    fq_modis_tau_reffi = 0.0_wp
 ! BMD 07/26 - end
 
 !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -908,6 +932,7 @@ END SUBROUTINE cosp_initialize
               cltmodis, clwmodis, climodis,                &
               fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
               fq_modis_tau_ctp_ice,                        &
+              fq_modis_tau_reffl, fq_modis_tau_reffi,      &
               dpiz_s_nir, dcg_s_nir )
 ! BMD 07/26 - end
    
@@ -1064,6 +1089,24 @@ END SUBROUTINE cosp_initialize
              i=i+1
              ct => modis_tau_ctp_ice_types(i)%ptr2
              ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_ctp_ice(1:kproma,itau,ipres)  *  od_cosp
+          ENDDO
+       ENDDO
+
+       i=0
+       DO itau=1,7
+          DO ipres=1,8
+             i=i+1
+             ct => modis_tau_reffl_types(i)%ptr2
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_reffl(1:kproma,itau,ipres)  *  od_cosp
+          ENDDO
+       ENDDO
+
+       i=0
+       DO itau=1,7
+          DO ipres=1,8
+             i=i+1
+             ct => modis_tau_reffi_types(i)%ptr2
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_reffi(1:kproma,itau,ipres)  *  od_cosp
           ENDDO
        ENDDO
 

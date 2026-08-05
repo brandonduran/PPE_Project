@@ -84,6 +84,7 @@ SUBROUTINE cosp_modis_simulator(                          &
              cltmodis, clwmodis, climodis,                &
              fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
              fq_modis_tau_ctp_ice,                        &
+             fq_modis_tau_reffl, fq_modis_tau_reffi,      &
              dpiz_s_nir, dcg_s_nir                        &
              )
 
@@ -148,6 +149,16 @@ SUBROUTINE cosp_modis_simulator(                          &
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp(kbdim,7,7)
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp_liq(kbdim,7,7)
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_ctp_ice(kbdim,7,7)
+
+!  joint histograms of optical thickness vs. retrieved liquid/ice effective
+!  radius (BMD 08/26) -- a different axis pairing than fq_modis_lwp_reffl/
+!  fq_modis_iwp_reffi above (LWP/IWP vs. Reff): here the FULL subcolumn tau
+!  (the same axis as fq_modis_tau_ctp) is crossed with Reff instead. Bin
+!  counts (7 tau x 8 ReffLiq/ReffIce) must match n_modis_tau/n_modis_reffl/
+!  n_modis_reffi declared in cosp_icarus.f90, same hardcoded-literal
+!  convention as the other joint histograms here.
+   REAL(wp), INTENT(INOUT) :: fq_modis_tau_reffl(kbdim,7,8)
+   REAL(wp), INTENT(INOUT) :: fq_modis_tau_reffi(kbdim,7,8)
 
 !  near-IR (3.7 micron) single-scattering albedo/asymmetry, sourced from
 !  cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir via mo_cosp_simulator.f90's
@@ -217,9 +228,11 @@ SUBROUTINE cosp_modis_simulator(                          &
             fq_modis_lwp_reffl,fq_modis_iwp_reffi, &
             cltmodis,clwmodis,climodis, &
             fq_modis_tau_ctp,fq_modis_tau_ctp_liq,fq_modis_tau_ctp_ice, &
+            fq_modis_tau_reffl,fq_modis_tau_reffi, &
             dpiz_s_nir_l,dcg_s_nir_l)
 
-  ! No output flip needed for the LWP/IWP/ReffLiq/ReffIce histograms: unlike
+  ! No output flip needed for the LWP/IWP/ReffLiq/ReffIce histograms, nor for
+  ! the tau-vs-ReffLiq/tau-vs-ReffIce histograms (BMD 08/26): unlike
   ! fq_isccp's pressure axis (see cosp_isccp_simulator, which owns that
   ! flip), those bin axes are physical-value thresholds with no dependence
   ! on model level ordering, so icarus's bin index already matches the

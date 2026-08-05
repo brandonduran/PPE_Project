@@ -28,6 +28,7 @@
      &     fq_modis_lwp_reffl, fq_modis_iwp_reffi, &
      &     cltmodis, clwmodis, climodis, &
      &     fq_modis_tau_ctp, fq_modis_tau_ctp_liq, fq_modis_tau_ctp_ice, &
+     &     fq_modis_tau_reffl, fq_modis_tau_reffi, &
      &     dpiz_s_nir, dcg_s_nir &
 ! BMD 07/26 - end
      &)
@@ -379,6 +380,22 @@
                   !  same, restricted to liquid-dominated subcolumns
       REAL(wp), OPTIONAL :: fq_modis_tau_ctp_ice(npoints,n_modis_tau,n_modis_pres)
                   !  same, restricted to ice-dominated subcolumns
+
+!     OPTIONAL, own group: MODIS-style optical-thickness-vs-particle-size
+!     joint histograms, ported from COSPv2's modis_column
+!     (Optical_Thickness_vs_ReffLiq/_vs_ReffIce, modis_simulator.F90) via
+!     ~/COSPv2.0 -- a different axis pairing than fq_modis_lwp_reffl/
+!     fq_modis_iwp_reffi above (LWP/IWP vs Reff): here the FULL subcolumn
+!     tau(j,ibox) (same itau(j) bin already used for fq_modis_tau_ctp) is
+!     crossed with the retrieved size instead of the water/ice path.
+!     Populated from the same box_reffl/box_reffi retrieval outcome as the
+!     LWP/IWP-vs-Reff histograms -- no separate retrieval attempt needed.
+      REAL(wp), OPTIONAL :: fq_modis_tau_reffl(npoints,n_modis_tau,n_modis_reffl)
+                  !  joint histogram of optical thickness vs. liquid
+                  !  effective radius, fraction of model grid box
+      REAL(wp), OPTIONAL :: fq_modis_tau_reffi(npoints,n_modis_tau,n_modis_reffi)
+                  !  joint histogram of optical thickness vs. ice
+                  !  effective radius, fraction of model grid box
 ! BMD 07/26 - end
 
 
@@ -443,6 +460,15 @@
                   !  modis_phase_threshold above and tau_phase_cum below)
       INTEGER  :: imodis_lwp(npoints), imodis_reffl(npoints)
       INTEGER  :: imodis_iwp(npoints), imodis_reffi(npoints)
+      LOGICAL  :: retrieval_valid
+                  !  BMD 08/26: whether THIS subcolumn's single size-
+                  !  retrieval attempt (liquid library for liquid-dominated
+                  !  and undetermined-phase subcolumns, ice library for
+                  !  ice-dominated ones) succeeded -- gates cltmodis/
+                  !  fq_modis_tau_ctp/fq_modis_tau_ctp_liq/_ice the same way
+                  !  COSPv2's validRetrievalMask gates its "total" outputs.
+                  !  See the detailed note at the retrieval-attempt block
+                  !  below.
 
 !     Simulated-reflectance MODIS size retrieval (Stage 4/5 of the port,
 !     BMD 07/26 fourth pass): synthesizes the "observed" near-IR
@@ -1419,6 +1445,35 @@
       ENDDO
       ENDDO
 
+      !reset MODIS-style tau-vs-ReffLiq and tau-vs-ReffIce joint-histogram
+      !frequencies -- same sunlit-only gate, same OPTIONAL group (populated
+      !alongside fq_modis_lwp_reffl/fq_modis_iwp_reffi from the same
+      !box_reffl/box_reffi retrieval outcome, just crossed with the tau bin
+      !instead of the LWP/IWP bin).
+      DO ilev=1,n_modis_tau
+      DO ilev2=1,n_modis_reffl
+        DO j=1,npoints
+             IF (sunlit(j).eq.1) THEN
+                fq_modis_tau_reffl(j,ilev,ilev2)= 0._wp
+             ELSE
+                fq_modis_tau_reffl(j,ilev,ilev2)= output_missing_value
+             ENDIF
+        ENDDO
+      ENDDO
+      ENDDO
+
+      DO ilev=1,n_modis_tau
+      DO ilev2=1,n_modis_reffi
+        DO j=1,npoints
+             IF (sunlit(j).eq.1) THEN
+                fq_modis_tau_reffi(j,ilev,ilev2)= 0._wp
+             ELSE
+                fq_modis_tau_reffi(j,ilev,ilev2)= output_missing_value
+             ENDIF
+        ENDDO
+      ENDDO
+      ENDDO
+
       !reset MODIS total/liquid/ice cloud fraction
       DO j=1,npoints
            IF (sunlit(j).eq.1) THEN
@@ -1597,8 +1652,10 @@
           ENDIF
 
 ! BMD 07/26 - start
-          !MODIS-style LWP-vs-ReffLiq and IWP-vs-ReffIce joint histograms.
-          !Matches ICON modis_simulator.F90's modis_column logic: each
+          !MODIS-style cltmodis/clwmodis/climodis, tau/CTP (total/liquid/
+          !ice), LWP-vs-ReffLiq, IWP-vs-ReffIce, and (BMD 08/26) tau-vs-
+          !ReffLiq/tau-vs-ReffIce joint histograms. Matches COSPv2's
+          !modis_column logic (modis_simulator.F90, ~/COSPv2.0): each
           !subcolumn is assigned a SINGLE dominant phase (liquid, ice, or
           !undetermined -- see modis_phase_threshold above, standing in for
           !that file's phaseDiscrimination_Threshold/phaseIsUndetermined),
@@ -1607,8 +1664,6 @@
           !phase's characteristic effective radius via the Stephens (1978)
           !bulk approximation CWP = (2/3)*rho*re*tau -- the same relation
           !modis_simulator.F90's lwpWRK/iwpWRK apply to the full retrievedTau.
-          !A subcolumn contributes to at most one of the two histograms,
-          !never both -- unlike the unconditional tau/CTP machinery above.
           !Gate is modis_min_optical_thickness (0.3), not the near-zero
           !tauchk the ISCCP machinery above uses -- matches real MODIS's
           !actual detection limit (see modis_min_optical_thickness above).
@@ -1620,10 +1675,98 @@
           IF (sunlit(j).eq.1 .and. &
      &        tau(j,ibox) .ge. modis_min_optical_thickness) THEN
 
-            !cltmodis counts every MODIS-detected subcolumn regardless of
-            !phase outcome (including "undetermined"), matching real COSP's
-            !cloudMask = phase/=phaseIsNone -- so cltmodis is NOT simply
-            !clwmodis+climodis
+            !cloud-top-weighted phase fraction (tau_phase_cum/tauf_phase_cum,
+            !ported from weight_by_extinction above). Moved ahead of
+            !cltmodis/fq_modis_tau_ctp (BMD 08/26): the size-retrieval
+            !attempt just below needs the phase classification up front to
+            !pick a trial library, and that retrieval's success now gates
+            !the total-cloud outputs (see the next comment).
+            IF ( tau_phase_cum(j,ibox) .gt. (tauchk) ) THEN
+              liquid_fraction(j) = tauf_phase_cum(j,ibox) &
+     &          / tau_phase_cum(j,ibox)
+            ELSE
+              liquid_fraction(j) = -1._wp
+            ENDIF
+
+            !BMD 08/26 -- size-retrieval attempt, run once per subcolumn
+            !regardless of phase outcome; its success gates the total-cloud
+            !outputs below. This replaces the earlier design (547ce56's
+            !commit message) that left cltmodis/fq_modis_tau_ctp
+            !unconditional on retrieval success, believing that "matched
+            !the reference" -- direct inspection of ~/COSPv2.0's
+            !modis_simulator.F90 shows the opposite: modis_subcolumn
+            !(:159-165) sets retrievedTau/cloudMask from tau alone, but
+            !modis_column (:311-330) builds
+            !validRetrievalMask = particle_size > 0 and ANDs it into
+            !cloudMask before computing Cloud_Fraction_Total_Mean and
+            !masking tauWRK/ctpWRK for
+            !Optical_Thickness_vs_Cloud_Top_Pressure (:402-414) -- i.e. a
+            !subcolumn whose near-IR reflectance retrieval fails to bracket
+            !a trial size is dropped from the TOTAL tau/CTP histogram too,
+            !not just from the LWP/IWP-vs-Reff ones. modis_subcolumn
+            !(:204-215) also shows which library each phase uses:
+            !phaseIsLiquid AND phaseIsUndetermined both invert against the
+            !LIQUID trial library; only phaseIsIce uses the ice library --
+            !so an undetermined-phase subcolumn still gets a (liquid-
+            !library) retrieval attempt purely to decide whether it counts
+            !toward the total, even though it never contributes to
+            !clwmodis or the liquid-specific histograms below (those
+            !require phase==liquid specifically, not just "a liquid-
+            !library retrieval was attempted"). clwmodis/climodis
+            !themselves are ALSO gated on box_reffl(j)/box_reffi(j) >= 0
+            !(see the liquid/ice phase branches below), matching COSPv2's
+            !Cloud_Fraction_Water_Mean/Cloud_Fraction_Ice_Mean, whose
+            !waterCloudMask/iceCloudMask (modis_simulator.F90:314-317) are
+            !ANDed with the same validRetrievalMask as everything else in
+            !this block -- no divergence left here.
+            IF (liquid_fraction(j) .gt. (1._wp-modis_phase_threshold)) THEN
+              !liquid-dominated (>=modis_phase_threshold) or undetermined
+              !((1-modis_phase_threshold, modis_phase_threshold)): liquid
+              !trial library, matching modis_subcolumn's phaseIsLiquid .OR.
+              !phaseIsUndetermined branch
+              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
+                 predicted_refl_w(1:num_trial_res) = two_stream_reflectance( &
+     &              tau(j,ibox), trial_g_w(1:num_trial_res), &
+     &              trial_w0_w(1:num_trial_res))
+                 box_reffl(j) = 1.e-6_wp * interpolate_to_min( &
+     &              trial_re_w(1:num_trial_res), &
+     &              predicted_refl_w(1:num_trial_res), obs_refl_run(j,ibox))
+              ELSE
+                 box_reffl(j) = -1._wp
+              ENDIF
+              retrieval_valid = (box_reffl(j) .ge. 0._wp)
+            ELSE IF (liquid_fraction(j) .ge. 0._wp .and. &
+     &        liquid_fraction(j) .le. (1._wp-modis_phase_threshold)) THEN
+              !ice-dominated: ice trial library
+              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
+                 predicted_refl_i(1:num_trial_res) = two_stream_reflectance( &
+     &              tau(j,ibox), trial_g_i(1:num_trial_res), &
+     &              trial_w0_i(1:num_trial_res))
+                 box_reffi(j) = 1.e-6_wp * interpolate_to_min( &
+     &              trial_re_i(1:num_trial_res), &
+     &              predicted_refl_i(1:num_trial_res), obs_refl_run(j,ibox))
+              ELSE
+                 box_reffi(j) = -1._wp
+              ENDIF
+              retrieval_valid = (box_reffi(j) .ge. 0._wp)
+            ELSE
+              !liquid_fraction(j) < 0: no extinction at all within the
+              !top-of-cloud phase-weighting window (an ECHAM-specific edge
+              !case -- COSPv2's own weight_by_extinction has no true
+              !sentinel here, it falls back to a 0.0 liquid fraction, i.e.
+              !phaseIsIce; this file keeps the -1 sentinel as a distinct
+              !"no phase info" case instead of silently reclassifying it as
+              !ice -- a pre-existing, deliberate divergence, unrelated to
+              !this retrieval-gating change). No retrieval is attempted.
+              box_reffl(j) = -1._wp
+              box_reffi(j) = -1._wp
+              retrieval_valid = .false.
+            ENDIF
+
+            !Total-cloud outputs require the retrieval above to have
+            !succeeded (see the BMD 08/26 note above).
+            IF (retrieval_valid) THEN
+
             cltmodis(j) = cltmodis(j) + boxarea
 
             !MODIS-style tau/CTP joint histogram (all phases). itau(j) was
@@ -1673,39 +1816,31 @@
               ENDIF
             ENDIF
 
-            !cloud-top-weighted phase fraction (tau_phase_cum/tauf_phase_cum,
-            !ported from weight_by_extinction above)
-            IF ( tau_phase_cum(j,ibox) .gt. (tauchk) ) THEN
-              liquid_fraction(j) = tauf_phase_cum(j,ibox) &
-     &          / tau_phase_cum(j,ibox)
-            ELSE
-              liquid_fraction(j) = -1._wp
             ENDIF
+            !ENDIF above closes the retrieval_valid guard around
+            !cltmodis/fq_modis_tau_ctp (BMD 08/26). imodis_pres(j) is only
+            !computed inside that guard, but that's safe: the liquid/ice
+            !tau/CTP writes below are themselves now gated on
+            !box_reffl(j)/box_reffi(j) >= 0, which (given the phase
+            !classification is the same test used above) can only be true
+            !when retrieval_valid was already true and imodis_pres(j) was
+            !freshly computed this same (j,ibox) iteration.
 
             IF (liquid_fraction(j) .ge. modis_phase_threshold) THEN
-              clwmodis(j) = clwmodis(j) + boxarea
-              !liquid-dominated subcolumn -> LWP-vs-ReffLiq. box_reffl comes
-              !from the simulated-reflectance retrieval (Stage 5 of the
-              !port): invert the predicted-reflectance-vs-trial-size curve
-              !(this subcolumn's total tau against the liquid trial
-              !library) against the synthesized observed reflectance
-              !(obs_refl_run, Stage 4 above). Negative
-              !(modis_re_fill*1.e-6_wp) means no bracket was found -- the
-              !observed reflectance falls outside what any trial liquid
-              !size can produce -- the real mechanism a MODIS retrieval
-              !goes missing by, not a direct threshold on some "true" size.
-              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
-                 predicted_refl_w(1:num_trial_res) = two_stream_reflectance( &
-     &              tau(j,ibox), trial_g_w(1:num_trial_res), &
-     &              trial_w0_w(1:num_trial_res))
-                 box_reffl(j) = 1.e-6_wp * interpolate_to_min( &
-     &              trial_re_w(1:num_trial_res), &
-     &              predicted_refl_w(1:num_trial_res), obs_refl_run(j,ibox))
-              ELSE
-                 box_reffl(j) = -1._wp
-              ENDIF
+              !liquid-dominated subcolumn -> LWP-vs-ReffLiq and tau-vs-
+              !ReffLiq. box_reffl was already computed above (single
+              !retrieval attempt per subcolumn, shared with the total-cloud
+              !gate) -- not recomputed here.
 
               IF (box_reffl(j) .ge. 0._wp) THEN
+              !clwmodis now INSIDE the box_reffl(j).ge.0._wp guard (BMD
+              !08/26, previously unconditional on phase alone): matches
+              !COSPv2's Cloud_Fraction_Water_Mean, whose waterCloudMask
+              !(modis_simulator.F90:314-315) is phase==phaseIsLiquid ANDed
+              !with the same validRetrievalMask as everything else in this
+              !block -- closing the divergence noted (and deliberately left
+              !open) in the previous retrieval-gating change.
+              clwmodis(j) = clwmodis(j) + boxarea
               box_lwp(j) = modis_lwp_conversion * box_reffl(j) * tau(j,ibox)
 
               imodis_lwp(j) = 0
@@ -1762,40 +1897,47 @@
                 fq_modis_lwp_reffl(j,imodis_lwp(j),imodis_reffl(j)) = &
      &            fq_modis_lwp_reffl(j,imodis_lwp(j),imodis_reffl(j)) + boxarea
               ENDIF
+
+              !MODIS-style tau-vs-ReffLiq joint histogram (BMD 08/26),
+              !ported from COSPv2's Optical_Thickness_vs_ReffLiq
+              !(modis_simulator.F90:438-440,455): the FULL subcolumn tau
+              !(itau(j), same bin as fq_modis_tau_ctp) crossed with the
+              !just-computed imodis_reffl(j) -- reuses both indices, no new
+              !computation needed.
+              IF (PRESENT(fq_modis_tau_reffl) .and. &
+     &            itau(j) .gt. 0 .and. imodis_reffl(j) .gt. 0) THEN
+                fq_modis_tau_reffl(j,itau(j),imodis_reffl(j)) = &
+     &            fq_modis_tau_reffl(j,itau(j),imodis_reffl(j)) + boxarea
               ENDIF
-              !ENDIF above closes the box_reffl(j).ge.0._wp guard -- the
-              !tau/CTP-Liq write below does NOT depend on box_reffl, so it
-              !stays outside that guard: a real MODIS retrieval's phase
-              !classification and tau/CTP histogram don't depend on
-              !whether the (separate) size retrieval also succeeded.
 
               !liquid-phase tau/CTP: reuses itau(j)/imodis_pres(j) already
-              !computed above (before the phase branch), same PRESENT gate
-              !as the total tau/CTP write
+              !computed above, same PRESENT gate as the total tau/CTP
+              !write. Now INSIDE the box_reffl(j).ge.0._wp guard (BMD
+              !08/26, previously outside it) -- see the detailed
+              !retrieval-gating note above: fq_modis_tau_ctp_liq can no
+              !longer contain area that fq_modis_tau_ctp (total) excludes.
               IF (PRESENT(fq_modis_tau_ctp) .and. &
      &            imodis_pres(j) .gt. 0 .and. itau(j) .gt. 0) THEN
                 fq_modis_tau_ctp_liq(j,itau(j),imodis_pres(j)) = &
      &            fq_modis_tau_ctp_liq(j,itau(j),imodis_pres(j)) + boxarea
               ENDIF
+              ENDIF
+              !ENDIF above closes the box_reffl(j).ge.0._wp guard, now
+              !wrapping LWP-vs-ReffLiq, tau-vs-ReffLiq, AND tau/CTP-Liq
+              !together (BMD 08/26).
 
             ELSE IF (liquid_fraction(j) .ge. 0._wp .and. &
      &        liquid_fraction(j) .le. (1._wp-modis_phase_threshold)) THEN
-              !ice-dominated subcolumn -> IWP-vs-ReffIce. box_reffi is the
-              !ice-library counterpart of box_reffl above -- see the notes
-              !there.
-              climodis(j) = climodis(j) + boxarea
-              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
-                 predicted_refl_i(1:num_trial_res) = two_stream_reflectance( &
-     &              tau(j,ibox), trial_g_i(1:num_trial_res), &
-     &              trial_w0_i(1:num_trial_res))
-                 box_reffi(j) = 1.e-6_wp * interpolate_to_min( &
-     &              trial_re_i(1:num_trial_res), &
-     &              predicted_refl_i(1:num_trial_res), obs_refl_run(j,ibox))
-              ELSE
-                 box_reffi(j) = -1._wp
-              ENDIF
+              !ice-dominated subcolumn -> IWP-vs-ReffIce and tau-vs-ReffIce.
+              !box_reffi was already computed above -- see the liquid-
+              !branch note.
 
               IF (box_reffi(j) .ge. 0._wp) THEN
+              !climodis now INSIDE the box_reffi(j).ge.0._wp guard (BMD
+              !08/26) -- same fix as clwmodis above, matching COSPv2's
+              !Cloud_Fraction_Ice_Mean/iceCloudMask coupling to
+              !validRetrievalMask.
+              climodis(j) = climodis(j) + boxarea
               box_iwp(j) = modis_lwp_conversion * modis_ice_density &
      &          * box_reffi(j) * tau(j,ibox)
 
@@ -1853,21 +1995,34 @@
                 fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) = &
      &            fq_modis_iwp_reffi(j,imodis_iwp(j),imodis_reffi(j)) + boxarea
               ENDIF
+
+              !MODIS-style tau-vs-ReffIce joint histogram (BMD 08/26) --
+              !see the tau-vs-ReffLiq note in the liquid branch above.
+              IF (PRESENT(fq_modis_tau_reffi) .and. &
+     &            itau(j) .gt. 0 .and. imodis_reffi(j) .gt. 0) THEN
+                fq_modis_tau_reffi(j,itau(j),imodis_reffi(j)) = &
+     &            fq_modis_tau_reffi(j,itau(j),imodis_reffi(j)) + boxarea
               ENDIF
-              !ENDIF above closes the box_reffi(j).ge.0._wp guard -- see
-              !the equivalent note in the liquid branch above.
 
               !ice-phase tau/CTP: same reuse pattern as the liquid branch
-              !above
+              !above -- now also INSIDE the box_reffi(j).ge.0._wp guard
+              !(BMD 08/26), matching the liquid branch's move.
               IF (PRESENT(fq_modis_tau_ctp) .and. &
      &            imodis_pres(j) .gt. 0 .and. itau(j) .gt. 0) THEN
                 fq_modis_tau_ctp_ice(j,itau(j),imodis_pres(j)) = &
      &            fq_modis_tau_ctp_ice(j,itau(j),imodis_pres(j)) + boxarea
               ENDIF
+              ENDIF
+              !ENDIF above closes the box_reffi(j).ge.0._wp guard, now
+              !wrapping IWP-vs-ReffIce, tau-vs-ReffIce, AND tau/CTP-Ice
+              !together (BMD 08/26).
             ENDIF
             !ELSE: mixed-phase/undetermined subcolumn, or no phase-resolved
-            !tau at all -- excluded from both histograms, matching ICON's
-            !phaseIsUndetermined/phaseIsNone handling.
+            !tau at all -- excluded from the liquid/ice-specific outputs,
+            !matching ICON's phaseIsUndetermined/phaseIsNone handling.
+            !(Undetermined subcolumns DO still count toward cltmodis/
+            !fq_modis_tau_ctp above if their liquid-library retrieval
+            !succeeded -- see the BMD 08/26 note.)
 
           ENDIF
           ENDIF

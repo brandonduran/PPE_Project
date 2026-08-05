@@ -56,6 +56,7 @@ CONTAINS
        cltmodis, clwmodis, climodis,                &
        fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
        fq_modis_tau_ctp_ice,                        &
+       fq_modis_tau_reffl, fq_modis_tau_reffi,      &
        dpiz_s_nir, dcg_s_nir                        &
 ! BMD 07/26 - end
                                                      )
@@ -140,6 +141,11 @@ CONTAINS
   REAL(wp) :: fq_modis_tau_ctp(kbdim,7,7)
   REAL(wp) :: fq_modis_tau_ctp_liq(kbdim,7,7)
   REAL(wp) :: fq_modis_tau_ctp_ice(kbdim,7,7)
+!  joint histograms of optical thickness vs. retrieved liquid/ice effective
+!  radius (BMD 08/26) -- bin counts (7,8) must match n_modis_tau/
+!  n_modis_reffl/n_modis_reffi declared in cosp_icarus.f90
+  REAL(wp) :: fq_modis_tau_reffl(kbdim,7,8)
+  REAL(wp) :: fq_modis_tau_reffi(kbdim,7,8)
 !  near-IR (3.7 micron) single-scattering albedo/asymmetry, passed straight
 !  through to cosp_modis_simulator (ISCCP doesn't need these)
   REAL(wp) :: dpiz_s_nir(kbdim,klev)
@@ -213,6 +219,7 @@ CONTAINS
       cltmodis, clwmodis, climodis,                &
       fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
       fq_modis_tau_ctp_ice,                        &
+      fq_modis_tau_reffl, fq_modis_tau_reffi,      &
       dpiz_s_nir, dcg_s_nir )
   ENDIF
 ! BMD 07/26 - end
