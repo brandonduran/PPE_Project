@@ -29,8 +29,14 @@
      &     cltmodis, clwmodis, climodis, &
      &     fq_modis_tau_ctp, fq_modis_tau_ctp_liq, fq_modis_tau_ctp_ice, &
      &     fq_modis_tau_reffl, fq_modis_tau_reffi, &
-     &     dpiz_s_nir, dcg_s_nir &
+     &     dpiz_s_nir, dcg_s_nir, &
 ! BMD 07/26 - end
+! BMD 09/26 - start
+     &     modis_diag_liq_attempt, modis_diag_liq_fail, &
+     &     modis_diag_liq_obshi, modis_diag_liq_obslo, &
+     &     modis_diag_ice_attempt, modis_diag_ice_fail, &
+     &     modis_diag_ice_obshi, modis_diag_ice_obslo &
+! BMD 09/26 - end
      &)
 
      USE mo_kind,  ONLY: wp
@@ -255,6 +261,37 @@
                   !  near-IR (3.7 micron) asymmetry parameter, same status
                   !  as dpiz_s_nir above
 ! BMD 07/26 - end
+
+! BMD 09/26 - start
+!     Diagnostic counters (fraction of sunlit subcolumns, boxarea-weighted,
+!     same convention as cltmodis/clwmodis/climodis) added to test whether
+!     clwmodis's near-collapse is caused by the near-IR size retrieval
+!     chronically failing to bracket the observed reflectance for
+!     liquid-classified subcolumns specifically (as opposed to, e.g., phase
+!     misclassification biasing subcolumns toward the ice branch instead).
+!     *_attempt: subcolumns where a liquid/ice-library retrieval was
+!     actually attempted (obs_refl_active .and. PRESENT(dpiz_s_nir)) --
+!     the denominator for a fail-rate diagnostic.
+!     *_fail: subset of *_attempt where interpolate_to_min could not
+!     bracket a root (box_reffl/box_reffi came back modis_re_fill).
+!     *_obshi/*_obslo: subset of *_fail split by which side of the trial
+!     curve's achievable reflectance range the "observed" reflectance
+!     (obs_refl_run, from the real per-level dpiz_s_nir/dcg_s_nir) fell
+!     outside of: obshi = exceeded the max reflectance any trial size can
+!     produce, obslo = fell below the min. This distinguishes "retrieval
+!     saturates because dpiz_s_nir/dcg_s_nir don't match the phase-specific
+!     Platnick trial library" from other possible causes.
+!     OPTIONAL like the rest of the MODIS group: omitted by
+!     mo_cosp_isccp_simulator.f90's ISCCP-only call site.
+      REAL(wp), OPTIONAL :: modis_diag_liq_attempt(npoints)
+      REAL(wp), OPTIONAL :: modis_diag_liq_fail(npoints)
+      REAL(wp), OPTIONAL :: modis_diag_liq_obshi(npoints)
+      REAL(wp), OPTIONAL :: modis_diag_liq_obslo(npoints)
+      REAL(wp), OPTIONAL :: modis_diag_ice_attempt(npoints)
+      REAL(wp), OPTIONAL :: modis_diag_ice_fail(npoints)
+      REAL(wp), OPTIONAL :: modis_diag_ice_obshi(npoints)
+      REAL(wp), OPTIONAL :: modis_diag_ice_obslo(npoints)
+! BMD 09/26 - end
 
       INTEGER :: overlap                   !  overlap type
                               !  1=max
@@ -1489,6 +1526,34 @@
       ENDIF
 ! BMD 07/26 - end
 
+! BMD 09/26 - start
+      !reset MODIS retrieval bracket-failure diagnostic counters (see the
+      !declaration comment above for what these measure).
+      IF (PRESENT(modis_diag_liq_attempt)) THEN
+      DO j=1,npoints
+           IF (sunlit(j).eq.1) THEN
+              modis_diag_liq_attempt(j)= 0._wp
+              modis_diag_liq_fail(j)= 0._wp
+              modis_diag_liq_obshi(j)= 0._wp
+              modis_diag_liq_obslo(j)= 0._wp
+              modis_diag_ice_attempt(j)= 0._wp
+              modis_diag_ice_fail(j)= 0._wp
+              modis_diag_ice_obshi(j)= 0._wp
+              modis_diag_ice_obslo(j)= 0._wp
+           ELSE
+              modis_diag_liq_attempt(j)= output_missing_value
+              modis_diag_liq_fail(j)= output_missing_value
+              modis_diag_liq_obshi(j)= output_missing_value
+              modis_diag_liq_obslo(j)= output_missing_value
+              modis_diag_ice_attempt(j)= output_missing_value
+              modis_diag_ice_fail(j)= output_missing_value
+              modis_diag_ice_obshi(j)= output_missing_value
+              modis_diag_ice_obslo(j)= output_missing_value
+           ENDIF
+      ENDDO
+      ENDIF
+! BMD 09/26 - end
+
 ! BMD 07/26 - start
       !reset MODIS-style tau/CTP joint-histogram frequencies (all phases,
       !liquid-only, ice-only). Same sunlit-only gate as the LWP/IWP reset
@@ -1731,6 +1796,22 @@
                  box_reffl(j) = 1.e-6_wp * interpolate_to_min( &
      &              trial_re_w(1:num_trial_res), &
      &              predicted_refl_w(1:num_trial_res), obs_refl_run(j,ibox))
+
+! BMD 09/26 - start
+                 IF (PRESENT(modis_diag_liq_attempt)) THEN
+                    modis_diag_liq_attempt(j) = modis_diag_liq_attempt(j) + boxarea
+                    IF (box_reffl(j) .lt. 0._wp) THEN
+                       modis_diag_liq_fail(j) = modis_diag_liq_fail(j) + boxarea
+                       IF (obs_refl_run(j,ibox) .gt. &
+     &                     maxval(predicted_refl_w(1:num_trial_res))) THEN
+                          modis_diag_liq_obshi(j) = modis_diag_liq_obshi(j) + boxarea
+                       ELSE IF (obs_refl_run(j,ibox) .lt. &
+     &                     minval(predicted_refl_w(1:num_trial_res))) THEN
+                          modis_diag_liq_obslo(j) = modis_diag_liq_obslo(j) + boxarea
+                       ENDIF
+                    ENDIF
+                 ENDIF
+! BMD 09/26 - end
               ELSE
                  box_reffl(j) = -1._wp
               ENDIF
@@ -1745,6 +1826,22 @@
                  box_reffi(j) = 1.e-6_wp * interpolate_to_min( &
      &              trial_re_i(1:num_trial_res), &
      &              predicted_refl_i(1:num_trial_res), obs_refl_run(j,ibox))
+
+! BMD 09/26 - start
+                 IF (PRESENT(modis_diag_ice_attempt)) THEN
+                    modis_diag_ice_attempt(j) = modis_diag_ice_attempt(j) + boxarea
+                    IF (box_reffi(j) .lt. 0._wp) THEN
+                       modis_diag_ice_fail(j) = modis_diag_ice_fail(j) + boxarea
+                       IF (obs_refl_run(j,ibox) .gt. &
+     &                     maxval(predicted_refl_i(1:num_trial_res))) THEN
+                          modis_diag_ice_obshi(j) = modis_diag_ice_obshi(j) + boxarea
+                       ELSE IF (obs_refl_run(j,ibox) .lt. &
+     &                     minval(predicted_refl_i(1:num_trial_res))) THEN
+                          modis_diag_ice_obslo(j) = modis_diag_ice_obslo(j) + boxarea
+                       ENDIF
+                    ENDIF
+                 ENDIF
+! BMD 09/26 - end
               ELSE
                  box_reffi(j) = -1._wp
               ENDIF

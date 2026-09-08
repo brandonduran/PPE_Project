@@ -117,6 +117,22 @@ MODULE mo_cosp_simulator
   REAL(wp), PRIVATE, POINTER :: cosp_modis_icecloud(:,:)      ! MODIS ice cloud fraction (climodis)
 ! BMD 07/26 - end
 
+! BMD 09/26 - start
+!  Retrieval bracket-failure diagnostic counters (fraction of sunlit
+!  subcolumns), added to test whether clwmodis's near-collapse is caused by
+!  the near-IR size retrieval chronically failing to bracket the observed
+!  reflectance for liquid-classified subcolumns -- see the declaration
+!  comment in cosp_icarus.f90 for exactly what these measure.
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_liq_attempt(:,:)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_liq_fail(:,:)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_liq_obshi(:,:)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_liq_obslo(:,:)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_ice_attempt(:,:)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_ice_fail(:,:)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_ice_obshi(:,:)
+  REAL(wp), PRIVATE, POINTER :: cosp_modis_ice_obslo(:,:)
+! BMD 09/26 - end
+
   REAL(wp), PRIVATE, POINTER :: cosp_calipso_cloud_fraction(:,:,:) ! COSP Cloud frequency of occurance as seen by CALIPSO
   REAL(wp), PRIVATE, POINTER :: cosp_lidar_lowcloud(:,:)           ! COSP Low-level cloud cover from CALIPSO  
   REAL(wp), PRIVATE, POINTER :: cosp_lidar_midcloud(:,:)           ! COSP Mid-level cloud cover from CALIPSO  
@@ -446,6 +462,37 @@ END SUBROUTINE cosp_initialize
       CALL add_stream_element (scosp, 'climodis', cosp_modis_icecloud,  &
                            longname='MODIS ice cloud area fraction', units='1')
 
+! BMD 09/26 - start
+!     Retrieval bracket-failure diagnostics -- see the declaration comment
+!     above and cosp_icarus.f90 for exactly what these measure. lpost=
+!     extra_output like the other diagnostic-only fields (cisccp_tau3d
+!     etc.), since these aren't part of the normal MODIS output set.
+      CALL add_stream_element (scosp, 'modliqat', cosp_modis_liq_attempt,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS liquid retrieval attempted (fraction of subcolumns)')
+      CALL add_stream_element (scosp, 'modliqfl', cosp_modis_liq_fail,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS liquid retrieval bracket failed (fraction of subcolumns)')
+      CALL add_stream_element (scosp, 'modliqhi', cosp_modis_liq_obshi,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS liquid retrieval failed, observed reflectance above trial max')
+      CALL add_stream_element (scosp, 'modliqlo', cosp_modis_liq_obslo,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS liquid retrieval failed, observed reflectance below trial min')
+      CALL add_stream_element (scosp, 'modiceat', cosp_modis_ice_attempt,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS ice retrieval attempted (fraction of subcolumns)')
+      CALL add_stream_element (scosp, 'modicefl', cosp_modis_ice_fail,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS ice retrieval bracket failed (fraction of subcolumns)')
+      CALL add_stream_element (scosp, 'modicehi', cosp_modis_ice_obshi,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS ice retrieval failed, observed reflectance above trial max')
+      CALL add_stream_element (scosp, 'modicelo', cosp_modis_ice_obslo,  &
+                           lpost=extra_output, units='1', &
+                           longname='MODIS ice retrieval failed, observed reflectance below trial min')
+! BMD 09/26 - end
+
       ALLOCATE(modis_lwp_reffl_types(56))
       DO i=1,56
             WRITE(name, '(a8,i2.2)') 'modislwp',i
@@ -624,6 +671,18 @@ END SUBROUTINE cosp_initialize
     REAL(wp) :: fq_modis_tau_reffl(kproma,7,8)
     REAL(wp) :: fq_modis_tau_reffi(kproma,7,8)
 ! BMD 07/26 - end
+! BMD 09/26 - start
+!  retrieval bracket-failure diagnostic counters -- see cosp_icarus.f90 for
+!  what these measure.
+    REAL(wp) :: modis_diag_liq_attempt(kproma)
+    REAL(wp) :: modis_diag_liq_fail(kproma)
+    REAL(wp) :: modis_diag_liq_obshi(kproma)
+    REAL(wp) :: modis_diag_liq_obslo(kproma)
+    REAL(wp) :: modis_diag_ice_attempt(kproma)
+    REAL(wp) :: modis_diag_ice_fail(kproma)
+    REAL(wp) :: modis_diag_ice_obshi(kproma)
+    REAL(wp) :: modis_diag_ice_obslo(kproma)
+! BMD 09/26 - end
 
     INTEGER:: k,j,i, itau, ipres, jk, jkb, jl
 
@@ -713,6 +772,16 @@ END SUBROUTINE cosp_initialize
     fq_modis_tau_reffl = 0.0_wp
     fq_modis_tau_reffi = 0.0_wp
 ! BMD 07/26 - end
+! BMD 09/26 - start
+    modis_diag_liq_attempt = 0.0_wp
+    modis_diag_liq_fail    = 0.0_wp
+    modis_diag_liq_obshi   = 0.0_wp
+    modis_diag_liq_obslo   = 0.0_wp
+    modis_diag_ice_attempt = 0.0_wp
+    modis_diag_ice_fail    = 0.0_wp
+    modis_diag_ice_obshi   = 0.0_wp
+    modis_diag_ice_obslo   = 0.0_wp
+! BMD 09/26 - end
 
 !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -933,7 +1002,11 @@ END SUBROUTINE cosp_initialize
               fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
               fq_modis_tau_ctp_ice,                        &
               fq_modis_tau_reffl, fq_modis_tau_reffi,      &
-              dpiz_s_nir, dcg_s_nir )
+              dpiz_s_nir, dcg_s_nir,                       &
+              modis_diag_liq_attempt, modis_diag_liq_fail, &
+              modis_diag_liq_obshi, modis_diag_liq_obslo,  &
+              modis_diag_ice_attempt, modis_diag_ice_fail, &
+              modis_diag_ice_obshi, modis_diag_ice_obslo )
 ! BMD 07/26 - end
    
 
@@ -1046,6 +1119,19 @@ END SUBROUTINE cosp_initialize
           cosp_modis_watercloud(j,jrow) = cosp_modis_watercloud(j,jrow) + clwmodis(j) *  od_cosp
           cosp_modis_icecloud(j,jrow)   = cosp_modis_icecloud(j,jrow)   + climodis(j) *  od_cosp
        ENDDO
+
+! BMD 09/26 - start
+       DO j=1,kproma
+          cosp_modis_liq_attempt(j,jrow) = cosp_modis_liq_attempt(j,jrow) + modis_diag_liq_attempt(j) *  od_cosp
+          cosp_modis_liq_fail(j,jrow)    = cosp_modis_liq_fail(j,jrow)    + modis_diag_liq_fail(j)    *  od_cosp
+          cosp_modis_liq_obshi(j,jrow)   = cosp_modis_liq_obshi(j,jrow)   + modis_diag_liq_obshi(j)   *  od_cosp
+          cosp_modis_liq_obslo(j,jrow)   = cosp_modis_liq_obslo(j,jrow)   + modis_diag_liq_obslo(j)   *  od_cosp
+          cosp_modis_ice_attempt(j,jrow) = cosp_modis_ice_attempt(j,jrow) + modis_diag_ice_attempt(j) *  od_cosp
+          cosp_modis_ice_fail(j,jrow)    = cosp_modis_ice_fail(j,jrow)    + modis_diag_ice_fail(j)    *  od_cosp
+          cosp_modis_ice_obshi(j,jrow)   = cosp_modis_ice_obshi(j,jrow)   + modis_diag_ice_obshi(j)   *  od_cosp
+          cosp_modis_ice_obslo(j,jrow)   = cosp_modis_ice_obslo(j,jrow)   + modis_diag_ice_obslo(j)   *  od_cosp
+       ENDDO
+! BMD 09/26 - end
 
        i=0
        DO itau=1,7

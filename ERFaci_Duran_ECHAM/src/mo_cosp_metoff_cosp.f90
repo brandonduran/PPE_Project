@@ -50,8 +50,15 @@ CONTAINS
                   fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
                   fq_modis_tau_ctp_ice,                        &
                   fq_modis_tau_reffl, fq_modis_tau_reffi,      &
-                  dpiz_s_nir, dcg_s_nir                        &
+                  dpiz_s_nir, dcg_s_nir,                       &
 ! BMD 07/26 - end
+! BMD 09/26 - start
+!diag
+                  modis_diag_liq_attempt, modis_diag_liq_fail, &
+                  modis_diag_liq_obshi, modis_diag_liq_obslo,  &
+                  modis_diag_ice_attempt, modis_diag_ice_fail, &
+                  modis_diag_ice_obshi, modis_diag_ice_obslo   &
+! BMD 09/26 - end
                                                                 )
   ! Arguments
 
@@ -144,6 +151,18 @@ CONTAINS
   REAL(wp) :: dpiz_s_nir(kbdim,klev)
   REAL(wp) :: dcg_s_nir(kbdim,klev)
 ! BMD 07/26 - end
+! BMD 09/26 - start
+!  retrieval bracket-failure diagnostic counters, passed straight through to
+!  cosp_simulator -- see cosp_icarus.f90 for what these measure.
+  REAL(wp) :: modis_diag_liq_attempt(kbdim)
+  REAL(wp) :: modis_diag_liq_fail(kbdim)
+  REAL(wp) :: modis_diag_liq_obshi(kbdim)
+  REAL(wp) :: modis_diag_liq_obslo(kbdim)
+  REAL(wp) :: modis_diag_ice_attempt(kbdim)
+  REAL(wp) :: modis_diag_ice_fail(kbdim)
+  REAL(wp) :: modis_diag_ice_obshi(kbdim)
+  REAL(wp) :: modis_diag_ice_obslo(kbdim)
+! BMD 09/26 - end
 
 ! stlidar lidar stats
   REAL(wp) :: srbval(SR_BINS)
@@ -303,10 +322,14 @@ CONTAINS
       fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
       fq_modis_tau_ctp_ice,                        &
       fq_modis_tau_reffl, fq_modis_tau_reffi,      &
-      dpiz_s_nir, dcg_s_nir )
+      dpiz_s_nir, dcg_s_nir,                       &
+      modis_diag_liq_attempt, modis_diag_liq_fail, &
+      modis_diag_liq_obshi, modis_diag_liq_obslo,  &
+      modis_diag_ice_attempt, modis_diag_ice_fail, &
+      modis_diag_ice_obshi, modis_diag_ice_obslo )
 ! BMD 07/26 - end
 
- 
+
 END SUBROUTINE COSP
 
 

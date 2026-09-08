@@ -85,7 +85,12 @@ SUBROUTINE cosp_modis_simulator(                          &
              fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
              fq_modis_tau_ctp_ice,                        &
              fq_modis_tau_reffl, fq_modis_tau_reffi,      &
-             dpiz_s_nir, dcg_s_nir                        &
+             dpiz_s_nir, dcg_s_nir,                       &
+!diag
+             modis_diag_liq_attempt, modis_diag_liq_fail, &
+             modis_diag_liq_obshi, modis_diag_liq_obslo,  &
+             modis_diag_ice_attempt, modis_diag_ice_fail, &
+             modis_diag_ice_obshi, modis_diag_ice_obslo   &
              )
 
   ! Arguments
@@ -168,6 +173,18 @@ SUBROUTINE cosp_modis_simulator(                          &
    REAL(wp), INTENT(INOUT) :: dpiz_s_nir(kbdim,klev)
    REAL(wp), INTENT(INOUT) :: dcg_s_nir(kbdim,klev)
 
+!  BMD 09/26 -- retrieval bracket-failure diagnostic counters, straight
+!  pass-through to icarus (npoints-only, no level dependence, so no flip
+!  needed). See cosp_icarus.f90 for what these measure.
+   REAL(wp), INTENT(INOUT) :: modis_diag_liq_attempt(kbdim)
+   REAL(wp), INTENT(INOUT) :: modis_diag_liq_fail(kbdim)
+   REAL(wp), INTENT(INOUT) :: modis_diag_liq_obshi(kbdim)
+   REAL(wp), INTENT(INOUT) :: modis_diag_liq_obslo(kbdim)
+   REAL(wp), INTENT(INOUT) :: modis_diag_ice_attempt(kbdim)
+   REAL(wp), INTENT(INOUT) :: modis_diag_ice_fail(kbdim)
+   REAL(wp), INTENT(INOUT) :: modis_diag_ice_obshi(kbdim)
+   REAL(wp), INTENT(INOUT) :: modis_diag_ice_obslo(kbdim)
+
   ! Local variables
   REAL(wp) :: pfull(kbdim, klev)
   REAL(wp) :: phalf(kbdim, klev + 1)
@@ -229,7 +246,11 @@ SUBROUTINE cosp_modis_simulator(                          &
             cltmodis,clwmodis,climodis, &
             fq_modis_tau_ctp,fq_modis_tau_ctp_liq,fq_modis_tau_ctp_ice, &
             fq_modis_tau_reffl,fq_modis_tau_reffi, &
-            dpiz_s_nir_l,dcg_s_nir_l)
+            dpiz_s_nir_l,dcg_s_nir_l, &
+            modis_diag_liq_attempt,modis_diag_liq_fail, &
+            modis_diag_liq_obshi,modis_diag_liq_obslo, &
+            modis_diag_ice_attempt,modis_diag_ice_fail, &
+            modis_diag_ice_obshi,modis_diag_ice_obslo)
 
   ! No output flip needed for the LWP/IWP/ReffLiq/ReffIce histograms, nor for
   ! the tau-vs-ReffLiq/tau-vs-ReffIce histograms (BMD 08/26): unlike
