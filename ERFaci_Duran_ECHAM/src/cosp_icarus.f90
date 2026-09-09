@@ -29,7 +29,6 @@
      &     cltmodis, clwmodis, climodis, &
      &     fq_modis_tau_ctp, fq_modis_tau_ctp_liq, fq_modis_tau_ctp_ice, &
      &     fq_modis_tau_reffl, fq_modis_tau_reffi, &
-     &     dpiz_s_nir, dcg_s_nir, &
 ! BMD 07/26 - end
 ! BMD 09/26 - start
      &     modis_diag_liq_attempt, modis_diag_liq_fail, &
@@ -243,7 +242,7 @@
 ! BMD 07/26 - start
 !     OPTIONAL: callers that don't want the MODIS-style histograms below
 !     (e.g. mo_cosp_isccp_simulator.f90's ISCCP-only call site) can omit
-!     this whole trailing group of 9 arguments. Every code block below that
+!     this whole trailing group of 4 arguments. Every code block below that
 !     touches any of them is gated on PRESENT(...), so it's illegal/unsafe
 !     to reference one of these without checking PRESENT first.
       REAL(wp), OPTIONAL :: dtau_s_liq(npoints,nlev)
@@ -258,22 +257,6 @@
                   !  model levels
       REAL(wp), OPTIONAL :: reffi(npoints,nlev)
                   !  ice crystal effective radius (m) on full model levels
-      REAL(wp), OPTIONAL :: dpiz_s_nir(npoints,nlev)
-                  !  near-IR (3.7 micron, RRTMG-SW band 16) single-scattering
-                  !  albedo of the cloudy part of the grid box. SUPERSEDED
-                  !  (BMD 09/26): the simulated-reflectance retrieval now
-                  !  computes its own per-level near-IR single-scattering
-                  !  albedo/asymmetry directly from reffl/reffi via
-                  !  get_g_nir/get_ssa_nir (see the "observed" reflectance
-                  !  block below), since RRTMG band 16 (3.08-3.85 micron) is
-                  !  a much wider proxy than the true MODIS band 20 channel
-                  !  (3.66-3.84 micron). No longer read by icarus's main
-                  !  body; kept only as a PRESENT() gate for now -- callers
-                  !  should stop passing it once mo_psrad_interface.f90's
-                  !  RRTMG-band-16 sourcing is removed.
-      REAL(wp), OPTIONAL :: dcg_s_nir(npoints,nlev)
-                  !  near-IR (3.7 micron, RRTMG-SW band 16) asymmetry
-                  !  parameter, same superseded status as dpiz_s_nir above
 ! BMD 07/26 - end
 
 ! BMD 09/26 - start
@@ -1663,7 +1646,7 @@
       !(cosp_modis_interface.F90) via ~/COSPv2.0: computed once per icarus
       !call, not per subcolumn, since it doesn't depend on j/ibox. Reused
       !below by every liquid-/ice-dominated subcolumn's retrieval.
-      IF (PRESENT(dpiz_s_nir)) THEN
+      IF (PRESENT(dtau_s_liq)) THEN
          trial_re_w(1:num_trial_res) = modis_trial_re_water_min &
      &      + (modis_trial_re_water_max-modis_trial_re_water_min) &
      &        /REAL(num_trial_res-1,wp) * (/(i,i=0,num_trial_res-1)/)
@@ -1851,7 +1834,7 @@
               !((1-modis_phase_threshold, modis_phase_threshold)): liquid
               !trial library, matching modis_subcolumn's phaseIsLiquid .OR.
               !phaseIsUndetermined branch
-              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
+              IF (PRESENT(dtau_s_liq) .and. obs_refl_active(j,ibox)) THEN
                  predicted_refl_w(1:num_trial_res) = two_stream_reflectance( &
      &              tau(j,ibox), trial_g_w(1:num_trial_res), &
      &              trial_w0_w(1:num_trial_res))
@@ -1881,7 +1864,7 @@
             ELSE IF (liquid_fraction(j) .ge. 0._wp .and. &
      &        liquid_fraction(j) .le. (1._wp-modis_phase_threshold)) THEN
               !ice-dominated: ice trial library
-              IF (PRESENT(dpiz_s_nir) .and. obs_refl_active(j,ibox)) THEN
+              IF (PRESENT(dtau_s_liq) .and. obs_refl_active(j,ibox)) THEN
                  predicted_refl_i(1:num_trial_res) = two_stream_reflectance( &
      &              tau(j,ibox), trial_g_i(1:num_trial_res), &
      &              trial_w0_i(1:num_trial_res))

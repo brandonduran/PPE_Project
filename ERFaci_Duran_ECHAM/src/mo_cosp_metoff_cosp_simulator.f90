@@ -57,7 +57,6 @@ CONTAINS
        fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
        fq_modis_tau_ctp_ice,                        &
        fq_modis_tau_reffl, fq_modis_tau_reffi,      &
-       dpiz_s_nir, dcg_s_nir,                       &
 ! BMD 07/26 - end
 ! BMD 09/26 - start
 !diag
@@ -153,10 +152,6 @@ CONTAINS
 !  n_modis_reffl/n_modis_reffi declared in cosp_icarus.f90
   REAL(wp) :: fq_modis_tau_reffl(kbdim,7,8)
   REAL(wp) :: fq_modis_tau_reffi(kbdim,7,8)
-!  near-IR (3.7 micron) single-scattering albedo/asymmetry, passed straight
-!  through to cosp_modis_simulator (ISCCP doesn't need these)
-  REAL(wp) :: dpiz_s_nir(kbdim,klev)
-  REAL(wp) :: dcg_s_nir(kbdim,klev)
 ! BMD 07/26 - end
 ! BMD 09/26 - start
 !  retrieval bracket-failure diagnostic counters, passed straight through to
@@ -239,7 +234,6 @@ CONTAINS
       fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
       fq_modis_tau_ctp_ice,                        &
       fq_modis_tau_reffl, fq_modis_tau_reffi,      &
-      dpiz_s_nir, dcg_s_nir,                       &
       modis_diag_liq_attempt, modis_diag_liq_fail, &
       modis_diag_liq_obshi, modis_diag_liq_obslo,  &
       modis_diag_ice_attempt, modis_diag_ice_fail, &

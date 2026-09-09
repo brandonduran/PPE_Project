@@ -85,7 +85,6 @@ SUBROUTINE cosp_modis_simulator(                          &
              fq_modis_tau_ctp, fq_modis_tau_ctp_liq,      &
              fq_modis_tau_ctp_ice,                        &
              fq_modis_tau_reffl, fq_modis_tau_reffi,      &
-             dpiz_s_nir, dcg_s_nir,                       &
 !diag
              modis_diag_liq_attempt, modis_diag_liq_fail, &
              modis_diag_liq_obshi, modis_diag_liq_obslo,  &
@@ -165,17 +164,6 @@ SUBROUTINE cosp_modis_simulator(                          &
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_reffl(kbdim,7,8)
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_reffi(kbdim,7,8)
 
-!  near-IR (3.7 micron, RRTMG-SW band 16) single-scattering albedo/
-!  asymmetry, sourced from cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir via
-!  mo_cosp_simulator.f90. SUPERSEDED (BMD 09/26): cosp_icarus.f90's
-!  simulated-reflectance retrieval now computes its own near-IR optics
-!  directly from reffl/reffi via get_g_nir/get_ssa_nir (true MODIS band
-!  20, narrower than RRTMG band 16) and no longer reads these two arrays.
-!  Still passed through pending removal of the RRTMG-band-16 sourcing
-!  chain in mo_psrad_interface.f90/mo_cosp_simulator.f90.
-   REAL(wp), INTENT(INOUT) :: dpiz_s_nir(kbdim,klev)
-   REAL(wp), INTENT(INOUT) :: dcg_s_nir(kbdim,klev)
-
 !  BMD 09/26 -- retrieval bracket-failure diagnostic counters, straight
 !  pass-through to icarus (npoints-only, no level dependence, so no flip
 !  needed). See cosp_icarus.f90 for what these measure.
@@ -203,8 +191,6 @@ SUBROUTINE cosp_modis_simulator(                          &
   REAL(wp) :: dtau_s_ice_l(kbdim, klev)
   REAL(wp) :: reffl_l(kbdim, klev)
   REAL(wp) :: reffi_l(kbdim, klev)
-  REAL(wp) :: dpiz_s_nir_l(kbdim, klev)
-  REAL(wp) :: dcg_s_nir_l(kbdim, klev)
 
 ! icarus always computes the ISCCP tau/CTP histogram and its associated
 ! cloud-top-pressure/mean quantities as a side effect of computing per-
@@ -233,8 +219,6 @@ SUBROUTINE cosp_modis_simulator(                          &
   dtau_s_ice_l = dtau_s_ice(:,klev:1:-1)
   reffl_l      = reffl(:,klev:1:-1)
   reffi_l      = reffi(:,klev:1:-1)
-  dpiz_s_nir_l = dpiz_s_nir(:,klev:1:-1)
-  dcg_s_nir_l  = dcg_s_nir(:,klev:1:-1)
 
   CALL icarus(0,0,kbdim,sunlit_l,klev,ncolumns, &
             pfull,phalf,qv,cc,dtau_s_l, &
@@ -249,7 +233,6 @@ SUBROUTINE cosp_modis_simulator(                          &
             cltmodis,clwmodis,climodis, &
             fq_modis_tau_ctp,fq_modis_tau_ctp_liq,fq_modis_tau_ctp_ice, &
             fq_modis_tau_reffl,fq_modis_tau_reffi, &
-            dpiz_s_nir_l,dcg_s_nir_l, &
             modis_diag_liq_attempt,modis_diag_liq_fail, &
             modis_diag_liq_obshi,modis_diag_liq_obslo, &
             modis_diag_ice_attempt,modis_diag_ice_fail, &
