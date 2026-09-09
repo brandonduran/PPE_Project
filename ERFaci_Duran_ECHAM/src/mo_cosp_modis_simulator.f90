@@ -165,11 +165,14 @@ SUBROUTINE cosp_modis_simulator(                          &
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_reffl(kbdim,7,8)
    REAL(wp), INTENT(INOUT) :: fq_modis_tau_reffi(kbdim,7,8)
 
-!  near-IR (3.7 micron) single-scattering albedo/asymmetry, sourced from
-!  cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir via mo_cosp_simulator.f90's
-!  dpiz_s_nir/dcg_s_nir -- input to the simulated-reflectance size
-!  retrieval in cosp_icarus.f90 (BMD 07/26, third pass; not yet consumed
-!  by icarus's main body, Stage 3 wiring only so far).
+!  near-IR (3.7 micron, RRTMG-SW band 16) single-scattering albedo/
+!  asymmetry, sourced from cisccp_cldpiz3d_nir/cisccp_cldcg3d_nir via
+!  mo_cosp_simulator.f90. SUPERSEDED (BMD 09/26): cosp_icarus.f90's
+!  simulated-reflectance retrieval now computes its own near-IR optics
+!  directly from reffl/reffi via get_g_nir/get_ssa_nir (true MODIS band
+!  20, narrower than RRTMG band 16) and no longer reads these two arrays.
+!  Still passed through pending removal of the RRTMG-band-16 sourcing
+!  chain in mo_psrad_interface.f90/mo_cosp_simulator.f90.
    REAL(wp), INTENT(INOUT) :: dpiz_s_nir(kbdim,klev)
    REAL(wp), INTENT(INOUT) :: dcg_s_nir(kbdim,klev)
 

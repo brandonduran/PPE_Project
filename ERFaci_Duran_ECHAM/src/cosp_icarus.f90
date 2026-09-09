@@ -169,12 +169,20 @@
 !     ~/COSPv2.0 -- see the CONTAINS block at the end of this file for the
 !     ported procedures themselves (fit_to_quadratic/fit_to_cubic,
 !     get_g_nir/get_ssa_nir, two_stream/two_stream_reflectance,
-!     adding_doubling, interpolate_to_min). This is Stage 2 of the port:
-!     the procedures exist but are not yet called from icarus's main body
-!     (that's a later stage -- synthesizing the observed reflectance via
-!     two_stream/adding_doubling over dpiz_s_nir/dcg_s_nir, then inverting
-!     against these trial-size libraries via interpolate_to_min, replacing
-!     the current box_reffl/box_reffi model-truth shortcut).
+!     adding_doubling, interpolate_to_min). Fully wired into the main body:
+!     the "observed" reflectance is synthesized via two_stream/
+!     adding_doubling over a per-level near-IR single-scattering albedo/
+!     asymmetry parameter computed directly from the model's real reffl/
+!     reffi through get_g_nir/get_ssa_nir (ports COSPv2's modis_optics,
+!     cosp_optics.f90, tau-weighted liquid/ice combination -- confirmed
+!     against CAM6's own COSP2 MODIS simulator, which sources its
+!     equivalent sizeLIQ/sizeICE the same way), then inverted against
+!     these trial-size libraries via interpolate_to_min, replacing the
+!     earlier box_reffl/box_reffi model-truth shortcut. (Earlier passes of
+!     this port instead used a near-IR piz/cg pair proxied from RRTMG-SW
+!     band 16, which at 3.08-3.85 micron is much wider than the true
+!     MODIS band 20 channel, 3.66-3.84 micron -- superseded now that the
+!     narrowband get_g_nir/get_ssa_nir fits are evaluated directly.)
 !
 !     Trial-size grid bounds, in MICRONS (matching COSPv2's own unit
 !     convention for these specific constants -- NOT the meters convention
@@ -251,15 +259,21 @@
       REAL(wp), OPTIONAL :: reffi(npoints,nlev)
                   !  ice crystal effective radius (m) on full model levels
       REAL(wp), OPTIONAL :: dpiz_s_nir(npoints,nlev)
-                  !  near-IR (3.7 micron, ECHAM SW band 1) single-scattering
-                  !  albedo of the cloudy part of the grid box -- input to
-                  !  the simulated-reflectance MODIS size retrieval (see the
-                  !  CONTAINS block at the end of this file), not yet
-                  !  consumed by the main body (BMD 07/26, third pass,
-                  !  Stage 3 of the retrieval port -- wiring only so far)
+                  !  near-IR (3.7 micron, RRTMG-SW band 16) single-scattering
+                  !  albedo of the cloudy part of the grid box. SUPERSEDED
+                  !  (BMD 09/26): the simulated-reflectance retrieval now
+                  !  computes its own per-level near-IR single-scattering
+                  !  albedo/asymmetry directly from reffl/reffi via
+                  !  get_g_nir/get_ssa_nir (see the "observed" reflectance
+                  !  block below), since RRTMG band 16 (3.08-3.85 micron) is
+                  !  a much wider proxy than the true MODIS band 20 channel
+                  !  (3.66-3.84 micron). No longer read by icarus's main
+                  !  body; kept only as a PRESENT() gate for now -- callers
+                  !  should stop passing it once mo_psrad_interface.f90's
+                  !  RRTMG-band-16 sourcing is removed.
       REAL(wp), OPTIONAL :: dcg_s_nir(npoints,nlev)
-                  !  near-IR (3.7 micron) asymmetry parameter, same status
-                  !  as dpiz_s_nir above
+                  !  near-IR (3.7 micron, RRTMG-SW band 16) asymmetry
+                  !  parameter, same superseded status as dpiz_s_nir above
 ! BMD 07/26 - end
 
 ! BMD 09/26 - start
@@ -270,17 +284,18 @@
 !     liquid-classified subcolumns specifically (as opposed to, e.g., phase
 !     misclassification biasing subcolumns toward the ice branch instead).
 !     *_attempt: subcolumns where a liquid/ice-library retrieval was
-!     actually attempted (obs_refl_active .and. PRESENT(dpiz_s_nir)) --
+!     actually attempted (obs_refl_active .and. PRESENT(dtau_s_liq)) --
 !     the denominator for a fail-rate diagnostic.
 !     *_fail: subset of *_attempt where interpolate_to_min could not
 !     bracket a root (box_reffl/box_reffi came back modis_re_fill).
 !     *_obshi/*_obslo: subset of *_fail split by which side of the trial
 !     curve's achievable reflectance range the "observed" reflectance
-!     (obs_refl_run, from the real per-level dpiz_s_nir/dcg_s_nir) fell
-!     outside of: obshi = exceeded the max reflectance any trial size can
-!     produce, obslo = fell below the min. This distinguishes "retrieval
-!     saturates because dpiz_s_nir/dcg_s_nir don't match the phase-specific
-!     Platnick trial library" from other possible causes.
+!     (obs_refl_run, from the real per-level near-IR optics computed from
+!     reffl/reffi via get_g_nir/get_ssa_nir) fell outside of: obshi =
+!     exceeded the max reflectance any trial size can produce, obslo =
+!     fell below the min. This distinguishes "retrieval saturates because
+!     the observed near-IR optics don't match the phase-specific Platnick
+!     trial library" from other possible causes.
 !     OPTIONAL like the rest of the MODIS group: omitted by
 !     mo_cosp_isccp_simulator.f90's ISCCP-only call site.
       REAL(wp), OPTIONAL :: modis_diag_liq_attempt(npoints)
@@ -508,13 +523,16 @@
                   !  below.
 
 !     Simulated-reflectance MODIS size retrieval (Stage 4/5 of the port,
-!     BMD 07/26 fourth pass): synthesizes the "observed" near-IR
-!     reflectance per subcolumn from the model's real per-level optical
-!     properties (dpiz_s_nir/dcg_s_nir via two_stream/adding_doubling),
-!     then inverts it against an independent trial-size library
-!     (get_g_nir/get_ssa_nir/two_stream_reflectance/interpolate_to_min,
-!     all ported in the CONTAINS block) -- replaces the previous
-!     retau_liq/tau_liq model-truth shortcut for box_reffl/box_reffi.
+!     BMD 07/26 fourth pass, near-IR-optics sourcing updated BMD 09/26):
+!     synthesizes the "observed" near-IR reflectance per subcolumn from the
+!     model's real per-level optical properties (near-IR single-scattering
+!     albedo/asymmetry computed from reffl/reffi via get_g_nir/get_ssa_nir,
+!     see nir_w0_combined/nir_g_combined below, via two_stream/
+!     adding_doubling), then inverts it against an independent trial-size
+!     library (get_g_nir/get_ssa_nir/two_stream_reflectance/
+!     interpolate_to_min, all ported in the CONTAINS block) -- replaces the
+!     previous retau_liq/tau_liq model-truth shortcut for box_reffl/
+!     box_reffi.
 !
 !     Reflectance-synthesis running state, one running (Refl,Tran) pair
 !     per subcolumn, updated top-down over cloudy levels via the same
@@ -529,6 +547,19 @@
       REAL(wp) :: refl_layer, tran_layer, refl_combined, tran_combined
                   !  per-(j,ibox,ilev) scratch scalars for the reflectance
                   !  synthesis above
+
+!     Per-level near-IR (true MODIS band 20, 3.66-3.84 micron) single-
+!     scattering albedo/asymmetry parameter, computed from the model's
+!     real reffl/reffi via get_g_nir/get_ssa_nir and tau-weighted between
+!     liquid and ice -- ports COSPv2's modis_optics (cosp_optics.f90) via
+!     ~/COSPv2.0, confirmed against CAM6's own COSP2 MODIS simulator
+!     (cospsimulator_intr.f90's MODIS_waterSize/MODIS_iceSize -> the same
+!     modis_optics), which sources its equivalent near-IR optics the same
+!     way. Supersedes the RRTMG-SW-band-16-sourced dpiz_s_nir/dcg_s_nir
+!     (BMD 09/26) -- see the PRESENT(dtau_s_liq) block below.
+      REAL(wp) :: nir_w0_liq(npoints,nlev), nir_g_liq(npoints,nlev)
+      REAL(wp) :: nir_w0_ice(npoints,nlev), nir_g_ice(npoints,nlev)
+      REAL(wp) :: nir_w0_combined(npoints,nlev), nir_g_combined(npoints,nlev)
 
 !     Trial-size grid and its near-IR optical-property library (Platnick
 !     Collection-6 fits, get_g_nir/get_ssa_nir), computed once per icarus
@@ -904,30 +935,61 @@
       ENDIF
 ! BMD 07/26 - end
 
+! BMD 09/26 - start
+      !Per-level near-IR (true MODIS band 20) single-scattering albedo/
+      !asymmetry parameter, ported from COSPv2's modis_optics (cosp_optics.f90)
+      !via ~/COSPv2.0: get_g_nir/get_ssa_nir evaluated at the model's real
+      !reffl/reffi (meters -> microns via *1.e6_wp, matching CAM6's own
+      !COSP2 MODIS_waterSize/MODIS_iceSize sourcing in cospsimulator_intr.F90),
+      !then tau-weighted between liquid and ice. Supersedes dpiz_s_nir/
+      !dcg_s_nir (RRTMG-SW band 16, 3.08-3.85 micron -- much wider than
+      !MODIS band 20's actual 3.66-3.84 micron). Gated on PRESENT(dtau_s_liq)
+      !like the phase-discrimination block above, since it needs the same
+      !dtau_s_liq/dtau_s_ice/reffl/reffi group; masked to levels with
+      !nonzero liquid+ice tau to avoid a 0/0 in the w0-weighted g average.
+      IF (PRESENT(dtau_s_liq)) THEN
+      WHERE (dtau_s_liq+dtau_s_ice .gt. 0._wp)
+         nir_w0_liq      = get_ssa_nir(.true.,  reffl*1.e6_wp)
+         nir_g_liq       = get_g_nir(.true.,  reffl*1.e6_wp)
+         nir_w0_ice      = get_ssa_nir(.false., reffi*1.e6_wp)
+         nir_g_ice       = get_g_nir(.false., reffi*1.e6_wp)
+         nir_w0_combined = (dtau_s_liq*nir_w0_liq + dtau_s_ice*nir_w0_ice) &
+     &                    / (dtau_s_liq+dtau_s_ice)
+         nir_g_combined  = (dtau_s_liq*nir_w0_liq*nir_g_liq &
+     &                    + dtau_s_ice*nir_w0_ice*nir_g_ice) &
+     &                    / (nir_w0_combined*(dtau_s_liq+dtau_s_ice))
+      ELSEWHERE
+         nir_w0_combined = 0._wp
+         nir_g_combined  = 0._wp
+      ENDWHERE
+      ENDIF
+! BMD 09/26 - end
+
 ! BMD 07/26 - start
       !Simulated-reflectance synthesis (Stage 4 of the MODIS size-retrieval
       !port, BMD 07/26 fourth pass), ported from COSPv2's
       !compute_toa_reflectace/two_stream/adding_doubling (modis_simulator.F90)
       !via ~/COSPv2.0: synthesizes the "observed" near-IR reflectance per
       !subcolumn from the model's real per-level tau/single-scattering
-      !albedo/asymmetry, combining cloudy levels top-down via the
-      !adding-layers recursion (same math as adding_doubling in the
-      !CONTAINS block, called here 2 layers at a time: the running state
-      !as "layer 1", the current level as "layer 2" -- mathematically
-      !identical to running the full N-layer recursion at once, since it's
-      !already strictly sequential). No tau limit here -- unlike the
-      !phase/CTP retrievals above, compute_toa_reflectace processes the
-      !whole cloudy profile. Gated on PRESENT(dpiz_s_nir) specifically,
-      !independent of the dtau_s_liq/fq_modis_tau_ctp groups above, since
-      !this only needs dtau_s/dpiz_s_nir/dcg_s_nir/frac_out.
-      IF (PRESENT(dpiz_s_nir)) THEN
+      !albedo/asymmetry (nir_w0_combined/nir_g_combined above), combining
+      !cloudy levels top-down via the adding-layers recursion (same math as
+      !adding_doubling in the CONTAINS block, called here 2 layers at a
+      !time: the running state as "layer 1", the current level as
+      !"layer 2" -- mathematically identical to running the full N-layer
+      !recursion at once, since it's already strictly sequential). No tau
+      !limit here -- unlike the phase/CTP retrievals above,
+      !compute_toa_reflectace processes the whole cloudy profile. Gated on
+      !PRESENT(dtau_s_liq) specifically, independent of the
+      !fq_modis_tau_ctp group above, since this only needs
+      !dtau_s/nir_w0_combined/nir_g_combined/frac_out.
+      IF (PRESENT(dtau_s_liq)) THEN
       DO ilev=1,nlev
             DO ibox=1,ncol
               DO j=1,npoints
                  IF (frac_out(j,ibox,ilev).eq.1._wp .and. &
      &               dtau_s(j,ilev).gt.0._wp) THEN
-                    CALL two_stream(dtau_s(j,ilev), dcg_s_nir(j,ilev), &
-     &                 dpiz_s_nir(j,ilev), refl_layer, tran_layer)
+                    CALL two_stream(dtau_s(j,ilev), nir_g_combined(j,ilev), &
+     &                 nir_w0_combined(j,ilev), refl_layer, tran_layer)
                     IF (.not. obs_refl_active(j,ibox)) THEN
                        obs_refl_run(j,ibox) = refl_layer
                        obs_tran_run(j,ibox) = tran_layer
