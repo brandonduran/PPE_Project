@@ -624,8 +624,7 @@
       CHARACTER*10 :: ftn09
       
       DATA isccp_taumin / 0.3_wp /
-!cms      DATA output_missing_value / -1.E+30 /
-      DATA output_missing_value / 0._wp /
+      DATA output_missing_value / -1.E+30 /
       DATA cchar / ' ','-','1','+','I','+'/
       DATA cchar_realtops / ' ',' ','1','1','I','I'/
 

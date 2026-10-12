@@ -599,6 +599,7 @@ END SUBROUTINE cosp_initialize
     REAL(wp) :: dem_s(kproma,klev)
     REAL(wp) :: tca(kproma,klev)
     REAL(wp) :: sunlit(kproma)
+    REAL(wp) :: od_sun(kproma)   ! od_cosp where sunlit, 0 at night (passive-simulator accumulation weight)
     REAL(wp) :: skt(kproma)
     REAL(wp) :: Reff(kproma,klev,N_hydro)
     REAL(wp) :: zlev_half(kproma,klev)
@@ -1036,27 +1037,45 @@ END SUBROUTINE cosp_initialize
     END IF !Llidar_sim
    
 
+! BMD 10/26 - start
+!  Passive (solar-reflectance) simulators -- ISCCP and MODIS -- are only
+!  defined for sunlit scenes. Mirror CESM's "set dark-scenes to fill value"
+!  (cospsimulator_intr.F90) by accumulating them ONLY on sunlit calls
+!  (od_sun = 0 at night), so night points contribute nothing rather than a
+!  spurious 0. cosp_sunlit_av (accumulated above with the same weight) is the
+!  matching denominator: sunlit-only mean = field / cosp_sunlit_av, with
+!  cosp_sunlit_av == 0 (never sunlit) meaning undefined. That final division
+!  is done in post-processing; the model fields stay sunlit-weighted sums.
+    DO j=1,kproma
+       IF (cosp_sunlit(j,jrow) > 0._wp) THEN
+          od_sun(j) = od_cosp
+       ELSE
+          od_sun(j) = 0._wp
+       END IF
+    END DO
+! BMD 10/26 - end
+
     IF (Lisccp_sim) THEN
 
        DO j=1,kproma
-          cosp_isccp_totalcloud(j,jrow) = cosp_isccp_totalcloud(j,jrow)+ totalcldarea(j)  *  od_cosp
+          cosp_isccp_totalcloud(j,jrow) = cosp_isccp_totalcloud(j,jrow)+ totalcldarea(j)  *  od_sun(j)
        ENDDO
 
        ! weight by totalcloud for time mean
        DO j=1,kproma
-          cosp_isccp_meanptop(j,jrow) = cosp_isccp_meanptop(j,jrow)+  totalcldarea(j) * meanptop(j)  *  od_cosp
+          cosp_isccp_meanptop(j,jrow) = cosp_isccp_meanptop(j,jrow)+  totalcldarea(j) * meanptop(j)  *  od_sun(j)
        ENDDO
 
        ! weight by totalcloud for time mean
        DO j=1,kproma
           cosp_isccp_meanalbedocld(j,jrow) = cosp_isccp_meanalbedocld(j,jrow) &
-               + totalcldarea(j) * meanalbedocld(j)  *  od_cosp
+               + totalcldarea(j) * meanalbedocld(j)  *  od_sun(j)
        ENDDO
 
        ! weight by totalcloud for time mean
        DO j=1,kproma
           cosp_isccp_meantaucld(j,jrow) = cosp_isccp_meantaucld(j,jrow)   &
-               +   totalcldarea(j) * meantaucld(j)  *  od_cosp
+               +   totalcldarea(j) * meantaucld(j)  *  od_sun(j)
        ENDDO
 
        i=0
@@ -1064,7 +1083,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,7
              i=i+1
              ct => isccp_cldtypes(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_isccp(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_isccp(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
@@ -1074,21 +1093,21 @@ END SUBROUTINE cosp_initialize
     IF (Lmodis_sim) THEN
 
        DO j=1,kproma
-          cosp_modis_totalcloud(j,jrow) = cosp_modis_totalcloud(j,jrow) + cltmodis(j) *  od_cosp
-          cosp_modis_watercloud(j,jrow) = cosp_modis_watercloud(j,jrow) + clwmodis(j) *  od_cosp
-          cosp_modis_icecloud(j,jrow)   = cosp_modis_icecloud(j,jrow)   + climodis(j) *  od_cosp
+          cosp_modis_totalcloud(j,jrow) = cosp_modis_totalcloud(j,jrow) + cltmodis(j) *  od_sun(j)
+          cosp_modis_watercloud(j,jrow) = cosp_modis_watercloud(j,jrow) + clwmodis(j) *  od_sun(j)
+          cosp_modis_icecloud(j,jrow)   = cosp_modis_icecloud(j,jrow)   + climodis(j) *  od_sun(j)
        ENDDO
 
 ! BMD 09/26 - start
        DO j=1,kproma
-          cosp_modis_liq_attempt(j,jrow) = cosp_modis_liq_attempt(j,jrow) + modis_diag_liq_attempt(j) *  od_cosp
-          cosp_modis_liq_fail(j,jrow)    = cosp_modis_liq_fail(j,jrow)    + modis_diag_liq_fail(j)    *  od_cosp
-          cosp_modis_liq_obshi(j,jrow)   = cosp_modis_liq_obshi(j,jrow)   + modis_diag_liq_obshi(j)   *  od_cosp
-          cosp_modis_liq_obslo(j,jrow)   = cosp_modis_liq_obslo(j,jrow)   + modis_diag_liq_obslo(j)   *  od_cosp
-          cosp_modis_ice_attempt(j,jrow) = cosp_modis_ice_attempt(j,jrow) + modis_diag_ice_attempt(j) *  od_cosp
-          cosp_modis_ice_fail(j,jrow)    = cosp_modis_ice_fail(j,jrow)    + modis_diag_ice_fail(j)    *  od_cosp
-          cosp_modis_ice_obshi(j,jrow)   = cosp_modis_ice_obshi(j,jrow)   + modis_diag_ice_obshi(j)   *  od_cosp
-          cosp_modis_ice_obslo(j,jrow)   = cosp_modis_ice_obslo(j,jrow)   + modis_diag_ice_obslo(j)   *  od_cosp
+          cosp_modis_liq_attempt(j,jrow) = cosp_modis_liq_attempt(j,jrow) + modis_diag_liq_attempt(j) *  od_sun(j)
+          cosp_modis_liq_fail(j,jrow)    = cosp_modis_liq_fail(j,jrow)    + modis_diag_liq_fail(j)    *  od_sun(j)
+          cosp_modis_liq_obshi(j,jrow)   = cosp_modis_liq_obshi(j,jrow)   + modis_diag_liq_obshi(j)   *  od_sun(j)
+          cosp_modis_liq_obslo(j,jrow)   = cosp_modis_liq_obslo(j,jrow)   + modis_diag_liq_obslo(j)   *  od_sun(j)
+          cosp_modis_ice_attempt(j,jrow) = cosp_modis_ice_attempt(j,jrow) + modis_diag_ice_attempt(j) *  od_sun(j)
+          cosp_modis_ice_fail(j,jrow)    = cosp_modis_ice_fail(j,jrow)    + modis_diag_ice_fail(j)    *  od_sun(j)
+          cosp_modis_ice_obshi(j,jrow)   = cosp_modis_ice_obshi(j,jrow)   + modis_diag_ice_obshi(j)   *  od_sun(j)
+          cosp_modis_ice_obslo(j,jrow)   = cosp_modis_ice_obslo(j,jrow)   + modis_diag_ice_obslo(j)   *  od_sun(j)
        ENDDO
 ! BMD 09/26 - end
 
@@ -1097,7 +1116,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,8
              i=i+1
              ct => modis_lwp_reffl_types(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_lwp_reffl(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_lwp_reffl(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
@@ -1106,7 +1125,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,8
              i=i+1
              ct => modis_iwp_reffi_types(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_iwp_reffi(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_iwp_reffi(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
@@ -1115,7 +1134,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,7
              i=i+1
              ct => modis_tau_ctp_types(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_ctp(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_ctp(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
@@ -1124,7 +1143,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,7
              i=i+1
              ct => modis_tau_ctp_liq_types(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_ctp_liq(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_ctp_liq(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
@@ -1133,7 +1152,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,7
              i=i+1
              ct => modis_tau_ctp_ice_types(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_ctp_ice(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_ctp_ice(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
@@ -1142,7 +1161,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,8
              i=i+1
              ct => modis_tau_reffl_types(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_reffl(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_reffl(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
@@ -1151,7 +1170,7 @@ END SUBROUTINE cosp_initialize
           DO ipres=1,8
              i=i+1
              ct => modis_tau_reffi_types(i)%ptr2
-             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_reffi(1:kproma,itau,ipres)  *  od_cosp
+             ct(1:kproma,jrow) =  ct(1:kproma,jrow) + fq_modis_tau_reffi(1:kproma,itau,ipres)  *  od_sun(1:kproma)
           ENDDO
        ENDDO
 
